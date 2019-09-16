@@ -44,7 +44,7 @@ pub(super) struct ControllerInner {
     pub(super) materializations: Materializations,
 
     /// Current recipe
-    recipe: Recipe,
+    pub recipe: Recipe,
 
     pub(super) domains: HashMap<DomainIndex, DomainHandle>,
     pub(in crate::controller) domain_nodes: HashMap<DomainIndex, Vec<NodeIndex>>,
@@ -1089,7 +1089,7 @@ impl ControllerInner {
     fn extend_recipe<A: Authority + 'static>(
         &mut self,
         authority: &Arc<A>,
-        add_txt: String,
+        add_txt: String, 
     ) -> Result<ActivationResult, String> {
         // needed because self.apply_recipe needs to mutate self.recipe, so can't have it borrowed
         let new = mem::replace(&mut self.recipe, Recipe::blank(None));
@@ -1103,6 +1103,7 @@ impl ControllerInner {
                         Some(mut state) => {
                             state.recipe_version = self.recipe.version();
                             state.recipes.push(add_txt.clone());
+                            //println!("lol\n{:?}\n\n\n", self.recipe);
                             Ok(state)
                         }
                     })

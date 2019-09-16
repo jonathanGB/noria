@@ -1,6 +1,7 @@
 use backlog;
 use noria::channel;
 use prelude::*;
+use std::collections::HashMap;
 
 /// A StreamUpdate reflects the addition or deletion of a row from a reader node.
 #[derive(Clone, Debug, PartialEq)]
@@ -36,6 +37,7 @@ pub struct Reader {
 
     for_node: NodeIndex,
     state: Option<Vec<usize>>,
+    inequality_queries: HashMap<u64, nom_sql::Operator>,
 }
 
 impl Clone for Reader {
@@ -46,17 +48,20 @@ impl Clone for Reader {
             streamers: self.streamers.clone(),
             state: self.state.clone(),
             for_node: self.for_node,
+            inequality_queries: self.inequality_queries.clone(),
         }
     }
 }
 
 impl Reader {
-    pub fn new(for_node: NodeIndex) -> Self {
+    pub fn new(for_node: NodeIndex, inequality_queries: HashMap<u64, nom_sql::Operator>) -> Self {
+        println!("Inequality: {:?}\n\n", &inequality_queries);
         Reader {
             writer: None,
             streamers: Vec::new(),
             state: None,
             for_node,
+            inequality_queries,
         }
     }
 
@@ -82,6 +87,7 @@ impl Reader {
             streamers: mem::replace(&mut self.streamers, Vec::new()),
             state: self.state.clone(),
             for_node: self.for_node,
+            inequality_queries: self.inequality_queries.clone(),
         }
     }
 

@@ -46,7 +46,7 @@ pub(super) enum ColumnChange {
 /// Only one `Migration` can be in effect at any point in time. No changes are made to the running
 /// graph until the `Migration` is committed (using `Migration::commit`).
 // crate viz for tests
-pub struct Migration<'a> {
+pub struct Migration<'a> { 
     pub(super) mainline: &'a mut ControllerInner,
     pub(super) added: HashSet<NodeIndex>,
     pub(super) columns: Vec<(NodeIndex, ColumnChange)>,
@@ -230,11 +230,11 @@ impl<'a> Migration<'a> {
         self.mainline.graph()
     }
 
-    fn ensure_reader_for(&mut self, n: NodeIndex, name: Option<String>) {
+    fn ensure_reader_for(&mut self, n: NodeIndex, name: Option<String>, inequality_queries: HashMap<u64, nom_sql::Operator>) {
         use std::collections::hash_map::Entry;
         if let Entry::Vacant(e) = self.readers.entry(n) {
             // make a reader
-            let r = node::special::Reader::new(n);
+            let r = node::special::Reader::new(n, inequality_queries);
             let mut r = if let Some(name) = name {
                 self.mainline.ingredients[n].named_mirror(r, name)
             } else {
@@ -254,7 +254,7 @@ impl<'a> Migration<'a> {
     ///
     /// To query into the maintained state, use `ControllerInner::get_getter`.
     pub fn maintain_anonymous(&mut self, n: NodeIndex, key: &[usize]) -> NodeIndex {
-        self.ensure_reader_for(n, None);
+        self.ensure_reader_for(n, None, HashMap::default());
         let ri = self.readers[&n];
 
         self.mainline.ingredients[ri]
@@ -267,8 +267,8 @@ impl<'a> Migration<'a> {
     /// Set up the given node such that its output can be efficiently queried.
     ///
     /// To query into the maintained state, use `ControllerInner::get_getter`.
-    pub fn maintain(&mut self, name: String, n: NodeIndex, key: &[usize]) {
-        self.ensure_reader_for(n, Some(name));
+    pub fn maintain(&mut self, name: String, n: NodeIndex, key: &[usize], inequality_queries: HashMap<u64, nom_sql::Operator>) {
+        self.ensure_reader_for(n, Some(name), inequality_queries);
 
         let ri = self.readers[&n];
 
