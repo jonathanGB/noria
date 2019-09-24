@@ -1,9 +1,9 @@
 use common::SizeOf;
-use fnv::FnvBuildHasher;
 use prelude::*;
 use rand::prelude::*;
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::ops::RangeBounds;
 
 /// Allocate a new end-user facing result table.
 crate fn new(cols: usize, key: &[usize]) -> (SingleReadHandle, WriteHandle) {
@@ -45,7 +45,6 @@ fn new_inner(
             use evmap;
             let (r, w) = evmap::Options::default()
                 .with_meta(-1)
-                .with_hasher(FnvBuildHasher::default())
                 .construct();
 
             (multir::Handle::$variant(r), multiw::Handle::$variant(w))
@@ -71,6 +70,7 @@ fn new_inner(
         handle: r,
         trigger,
         key: Vec::from(key),
+        operator: None,
     };
 
     (r, w)
@@ -259,13 +259,14 @@ impl WriteHandle {
                 unreachable!("mem size is {}, but map is empty", self.mem_size);
             }
 
-            match self.handle.empty_at_index(rng.gen()) {
-                None => (),
-                Some(vs) => {
-                    let size: u64 = vs.iter().map(|r| r.deep_size_of() as u64).sum();
-                    bytes_to_be_freed += size;
-                }
-            }
+            // TODO(jonathangb): Find an alternative to `empty_at_index`.
+            // match self.handle.empty_at_index(rng.gen()) {
+            //     None => (),
+            //     Some(vs) => {
+            //         let size: u64 = vs.iter().map(|r| r.deep_size_of() as u64).sum();
+            //         bytes_to_be_freed += size;
+            //     }
+            // }
             self.mem_size = self
                 .mem_size
                 .checked_sub(bytes_to_be_freed as usize)
@@ -293,6 +294,7 @@ pub struct SingleReadHandle {
     handle: multir::Handle,
     trigger: Option<Arc<dyn Fn(&[DataType]) -> bool + Send + Sync>>,
     key: Vec<usize>,
+    operator: Option<nom_sql::Operator>,
 }
 
 impl SingleReadHandle {
@@ -305,6 +307,14 @@ impl SingleReadHandle {
 
         // trigger a replay to populate
         (*self.trigger.as_ref().unwrap())(key)
+    }
+
+    pub fn get_operator(&self) -> &Option<nom_sql::Operator> {
+        &self.operator
+    }
+
+    pub fn set_operator(&mut self, operator: Option<nom_sql::Operator>) {
+        self.operator = operator;
     }
 
     /// Find all entries that matched the given conditions.
@@ -329,6 +339,22 @@ impl SingleReadHandle {
                 (records, meta)
             })
     }
+
+    pub fn try_find_range_and<F, T, R>(&self, range: R, then: F) -> Result<(Option<Vec<T>>, i64), ()>
+    where
+        F: Fn(&[Vec<DataType>]) -> T,
+        R: RangeBounds<common::DataType>,
+        {
+            self.handle
+                .meta_get_range_and(range, &then)
+                .ok_or(())
+                .map(|(mut records, meta)| {
+                    if records.is_none() && self.trigger.is_none() {
+                        records = Some(vec![then(&[])]);
+                    }
+                    (records, meta)
+                })
+        }
 
     pub fn len(&self) -> usize {
         self.handle.len()

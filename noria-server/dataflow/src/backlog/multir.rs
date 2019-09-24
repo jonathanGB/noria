@@ -1,12 +1,12 @@
 use common::DataType;
 use evmap;
-use fnv::FnvBuildHasher;
+use std::ops::RangeBounds;
 
 #[derive(Clone)]
 pub(super) enum Handle {
-    Single(evmap::ReadHandle<DataType, Vec<DataType>, i64, FnvBuildHasher>),
-    Double(evmap::ReadHandle<(DataType, DataType), Vec<DataType>, i64, FnvBuildHasher>),
-    Many(evmap::ReadHandle<Vec<DataType>, Vec<DataType>, i64, FnvBuildHasher>),
+    Single(evmap::ReadHandle<DataType, Vec<DataType>, i64>),
+    Double(evmap::ReadHandle<(DataType, DataType), Vec<DataType>, i64>),
+    Many(evmap::ReadHandle<Vec<DataType>, Vec<DataType>, i64>),
 }
 
 impl Handle {
@@ -56,6 +56,20 @@ impl Handle {
                 }
             }
             Handle::Many(ref h) => h.meta_get_and(key, then),
+        }
+    }
+
+    pub(super) fn meta_get_range_and<F, T, R>(&self, range: R, then: F) -> Option<(Option<Vec<T>>, i64)>
+    where
+        F: Fn(&[Vec<DataType>]) -> T,
+        R: RangeBounds<common::DataType>,
+    {
+        match *self {
+            Handle::Single(ref h) => {
+                h.meta_get_range_and(range, then)
+            },
+            // TODO(jonathangb): Consider handling other types of handle.
+            _ => unimplemented!(),
         }
     }
 }

@@ -1,12 +1,11 @@
 use super::{key_to_double, key_to_single, Key};
 use evmap;
-use fnv::FnvBuildHasher;
 use prelude::*;
 
 pub(super) enum Handle {
-    Single(evmap::WriteHandle<DataType, Vec<DataType>, i64, FnvBuildHasher>),
-    Double(evmap::WriteHandle<(DataType, DataType), Vec<DataType>, i64, FnvBuildHasher>),
-    Many(evmap::WriteHandle<Vec<DataType>, Vec<DataType>, i64, FnvBuildHasher>),
+    Single(evmap::WriteHandle<DataType, Vec<DataType>, i64>),
+    Double(evmap::WriteHandle<(DataType, DataType), Vec<DataType>, i64>),
+    Many(evmap::WriteHandle<Vec<DataType>, Vec<DataType>, i64>),
 }
 
 impl Handle {
@@ -46,15 +45,16 @@ impl Handle {
         }
     }
 
+    // TODO(jonathangb): Fix `empty_at_index`, which is not defined in a btree-map.
     /// Evict `count` randomly selected keys from state and return them along with the number of
     /// bytes freed.
-    pub fn empty_at_index(&mut self, index: usize) -> Option<&[Vec<DataType>]> {
-        match *self {
-            Handle::Single(ref mut h) => h.empty_at_index(index).map(|r| r.1),
-            Handle::Double(ref mut h) => h.empty_at_index(index).map(|r| r.1),
-            Handle::Many(ref mut h) => h.empty_at_index(index).map(|r| r.1),
-        }
-    }
+    // pub fn empty_at_index(&mut self, index: usize) -> Option<&[Vec<DataType>]> {
+    //     match *self {
+    //         Handle::Single(ref mut h) => h.empty_at_index(index).map(|r| r.1),
+    //         Handle::Double(ref mut h) => h.empty_at_index(index).map(|r| r.1),
+    //         Handle::Many(ref mut h) => h.empty_at_index(index).map(|r| r.1),
+    //     }
+    // }
 
     pub fn refresh(&mut self) {
         match *self {

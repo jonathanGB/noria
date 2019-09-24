@@ -36,7 +36,7 @@ pub struct Reader {
 
     for_node: NodeIndex,
     state: Option<Vec<usize>>,
-    pub operator: Option<nom_sql::Operator>,
+    operator: Option<nom_sql::Operator>,
 }
 
 impl Clone for Reader {
@@ -67,6 +67,10 @@ impl Reader {
 
     pub fn is_for(&self) -> NodeIndex {
         self.for_node
+    }
+
+    pub fn get_operator(&self) -> Option<nom_sql::Operator> {
+        self.operator.clone()
     }
 
     #[allow(dead_code)]

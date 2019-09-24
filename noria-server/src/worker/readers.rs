@@ -103,14 +103,47 @@ fn handle_message(
                 let mut ret = Vec::with_capacity(keys.len());
                 ret.resize(keys.len(), Vec::new());
 
-                // first do non-blocking reads for all keys to see if we can return immediately
-                let found = keys
-                    .iter_mut()
-                    .map(|key| {
-                        let rs = reader.try_find_and(key, dup).map(|r| r.0);
-                        (key, rs)
-                    })
-                    .enumerate();
+                use nom_sql::Operator;
+                let found : Vec<_> = match &reader.get_operator() {
+                    Some(op) if *op == Operator::Greater || *op == Operator::GreaterOrEqual || *op == Operator::Less || *op == Operator::LessOrEqual => {
+                        use std::ops::Bound::{Excluded, Included, Unbounded};
+
+                        keys
+                            .iter_mut()
+                            .map(|key| {
+                                let range = match op {
+                                    Operator::Greater => (Excluded(&key[0]), Unbounded),
+                                    Operator::GreaterOrEqual => (Included(&key[0]), Unbounded),
+                                    Operator::Less => (Unbounded, Excluded(&key[0])),
+                                    Operator::LessOrEqual => (Unbounded, Included(&key[0])),
+                                    _ => unimplemented!(),
+                                };
+
+                                let rs = reader.try_find_range_and(range, dup).map(|r| r.0);
+                                let rs = match rs {
+                                    Ok(Some(res)) => {
+                                        let flattened_res : Vec<Vec<_>> = res.into_iter().flatten().collect();
+                                        Ok(Some(flattened_res))
+                                    },
+                                    _ => Err(()),
+                                };
+                                (key, rs)
+                            })
+                            .enumerate()
+                            .collect()
+                    },
+                    _ => {
+                        // first do non-blocking reads for all keys to see if we can return immediately
+                        keys
+                            .iter_mut()
+                            .map(|key| {
+                                let rs = reader.try_find_and(key, dup).map(|r| r.0);
+                                (key, rs)
+                            })
+                            .enumerate()
+                            .collect()
+                    },
+                };
 
                 let mut ready = true;
                 let mut replaying = false;

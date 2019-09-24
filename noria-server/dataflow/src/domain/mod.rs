@@ -936,10 +936,11 @@ impl Domain {
                             }
                             InitialState::Global { gid, cols, key } => {
                                 use backlog;
-                                let (r_part, w_part) = backlog::new(cols, &key[..]);
+                                let (mut r_part, w_part) = backlog::new(cols, &key[..]);
 
                                 let mut n = self.nodes[node].borrow_mut();
                                 n.with_reader_mut(|r| {
+                                    r_part.set_operator(r.get_operator());
                                     assert!(self
                                         .readers
                                         .lock()
