@@ -302,7 +302,7 @@ impl SqlIncorporator {
                         // a base schema after the query was added to the graph). In this case, we
                         // move on to other reuse options.
                         let params: Vec<_> =
-                            qg.parameters().into_iter().map(Column::from).collect();
+                            qg.parameters().into_iter().map(|(col, _)| Column::from(col)).collect();
                         if let Some(mn) =
                             mir_reuse::rewind_until_columns_found(mir_query.leaf.clone(), &params)
                         {

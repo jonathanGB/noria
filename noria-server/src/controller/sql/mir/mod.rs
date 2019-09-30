@@ -1756,7 +1756,7 @@ impl SqlToMirConverter {
 
                         vec![Column::new(None, "bogokey")]
                     } else {
-                        qg.parameters().into_iter().map(Column::from).collect()
+                        qg.parameters().into_iter().map(|(col, _)| Column::from(col)).collect()
                     };
 
                     let topk_node = self.make_topk_node(
@@ -1824,7 +1824,7 @@ impl SqlToMirConverter {
                 final_node_cols.to_vec()
             };
 
-            for pc in qg.parameters() {
+            for (pc, _) in qg.parameters() {
                 let pc = Column::from(pc);
                 if !projected_columns.contains(&pc) {
                     projected_columns.push(pc);
@@ -1910,11 +1910,11 @@ impl SqlToMirConverter {
                         c
                     })
                     .collect();
-
+                println!("params:\n{:?}\n\n", &qg.parameters());
                 let query_params = if has_bogokey {
                     vec![Column::new(None, "bogokey")]
                 } else {
-                    qg.parameters().into_iter().map(Column::from).collect()
+                    qg.parameters().into_iter().map(|(col, _)| Column::from(col)).collect()
                 };
 
                 let operator = match &st.where_clause {
