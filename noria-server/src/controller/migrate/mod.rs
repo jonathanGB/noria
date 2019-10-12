@@ -230,11 +230,11 @@ impl<'a> Migration<'a> {
         self.mainline.graph()
     }
 
-    fn ensure_reader_for(&mut self, n: NodeIndex, name: Option<String>, operator: Option<nom_sql::Operator>) {
+    fn ensure_reader_for(&mut self, n: NodeIndex, name: Option<String>, operators: Vec<nom_sql::Operator>) {
         use std::collections::hash_map::Entry;
         if let Entry::Vacant(e) = self.readers.entry(n) {
             // make a reader
-            let r = node::special::Reader::new(n, operator);
+            let r = node::special::Reader::new(n, operators);
             let mut r = if let Some(name) = name {
                 self.mainline.ingredients[n].named_mirror(r, name)
             } else {
@@ -254,7 +254,7 @@ impl<'a> Migration<'a> {
     ///
     /// To query into the maintained state, use `ControllerInner::get_getter`.
     pub fn maintain_anonymous(&mut self, n: NodeIndex, key: &[usize]) -> NodeIndex {
-        self.ensure_reader_for(n, None, None);
+        self.ensure_reader_for(n, None, vec![]);
         let ri = self.readers[&n];
 
         self.mainline.ingredients[ri]
@@ -267,8 +267,8 @@ impl<'a> Migration<'a> {
     /// Set up the given node such that its output can be efficiently queried.
     ///
     /// To query into the maintained state, use `ControllerInner::get_getter`.
-    pub fn maintain(&mut self, name: String, n: NodeIndex, key: &[usize], operator: Option<nom_sql::Operator>) {
-        self.ensure_reader_for(n, Some(name), operator);
+    pub fn maintain(&mut self, name: String, n: NodeIndex, key: &[usize], operators: Vec<nom_sql::Operator>) {
+        self.ensure_reader_for(n, Some(name), operators);
 
         let ri = self.readers[&n];
 

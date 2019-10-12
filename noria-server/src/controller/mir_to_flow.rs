@@ -184,10 +184,10 @@ fn mir_node_to_flow_parts(
                     let parent = mir_node.ancestors[0].clone();
                     make_latest_node(&name, parent, mir_node.columns.as_slice(), group_by, mig)
                 }
-                MirNodeType::Leaf { ref keys, ref operator, .. } => {
+                MirNodeType::Leaf { ref keys, ref operators, .. } => {
                     assert_eq!(mir_node.ancestors.len(), 1);
                     let parent = mir_node.ancestors[0].clone();
-                    materialize_leaf_node(&parent, name, keys, mig, operator.clone());
+                    materialize_leaf_node(&parent, name, keys, mig, operators.clone());
                     // TODO(malte): below is yucky, but required to satisfy the type system:
                     // each match arm must return a `FlowNode`, so we use the parent's one
                     // here.
@@ -871,7 +871,7 @@ fn materialize_leaf_node(
     name: String,
     key_cols: &[Column],
     mig: &mut Migration,
-    operator: Option<nom_sql::Operator>,
+    operators: Vec<nom_sql::Operator>,
 ) {
     let na = parent.borrow().flow_node_addr().unwrap();
 
@@ -881,15 +881,14 @@ fn materialize_leaf_node(
     // already been added.
 
     // TODO(malte): consider the case when the projected columns need reordering
-
     if !key_cols.is_empty() {
         let key_cols: Vec<_> = key_cols
             .iter()
             .map(|c| parent.borrow().column_id_for_column(c, None))
             .collect();
-        mig.maintain(name, na, &key_cols[..], operator);
+        mig.maintain(name, na, &key_cols[..], operators);
     } else {
         // if no key specified, default to the first column
-        mig.maintain(name, na, &[0], operator);
+        mig.maintain(name, na, &[0], operators);
     }
 }

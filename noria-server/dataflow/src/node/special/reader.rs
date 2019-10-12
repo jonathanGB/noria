@@ -36,7 +36,7 @@ pub struct Reader {
 
     for_node: NodeIndex,
     state: Option<Vec<usize>>,
-    operator: Option<nom_sql::Operator>,
+    operators: Vec<nom_sql::Operator>,
 }
 
 impl Clone for Reader {
@@ -47,19 +47,19 @@ impl Clone for Reader {
             streamers: self.streamers.clone(),
             state: self.state.clone(),
             for_node: self.for_node,
-            operator: self.operator.clone(),
+            operators: self.operators.clone(),
         }
     }
 }
 
 impl Reader {
-    pub fn new(for_node: NodeIndex, operator: Option<nom_sql::Operator>) -> Self {
+    pub fn new(for_node: NodeIndex, operators: Vec<nom_sql::Operator>) -> Self {
         Reader {
             writer: None,
             streamers: Vec::new(),
             state: None,
             for_node,
-            operator,
+            operators,
         }
     }
 
@@ -69,8 +69,8 @@ impl Reader {
         self.for_node
     }
 
-    pub fn get_operator(&self) -> Option<nom_sql::Operator> {
-        self.operator.clone()
+    pub fn get_operators(&self) -> Vec<nom_sql::Operator> {
+        self.operators.clone()
     }
 
     #[allow(dead_code)]
@@ -89,7 +89,7 @@ impl Reader {
             streamers: mem::replace(&mut self.streamers, Vec::new()),
             state: self.state.clone(),
             for_node: self.for_node,
-            operator: self.operator.clone(),
+            operators: self.operators.clone(),
         }
     }
 

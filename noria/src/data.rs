@@ -1,6 +1,6 @@
 use arccstr::ArcCStr;
 
-use chrono::{self, NaiveDateTime};
+use chrono::{self, NaiveDateTime, NaiveDate, NaiveTime};
 
 use nom_sql::Literal;
 
@@ -92,6 +92,20 @@ impl fmt::Debug for DataType {
 }
 
 impl DataType {
+    /// Generates the minimum DataType corresponding to the type of a given DataType.
+    pub fn min_value(other: &Self) -> Self {
+        match other {
+            DataType::None => DataType::None,
+            DataType::Text(_) | DataType::TinyText(_) => DataType::TinyText([0; 15]),
+            DataType::Timestamp(_) => DataType::Timestamp(NaiveDateTime::new(chrono::naive::MIN_DATE, chrono::naive::NaiveTime::from_hms(0, 0, 0))),
+            DataType::Real(..) => DataType::Real(i64::min_value(), i32::max_value()),
+            DataType::Int(_) => DataType::Int(i32::min_value()),
+            DataType::UnsignedInt(_) => DataType::UnsignedInt(0),
+            DataType::BigInt(_) => DataType::BigInt(i64::min_value()),
+            DataType::UnsignedBigInt(_) => DataType::UnsignedInt(0),
+        }
+    }
+
     /// Clone the value contained within this `DataType`.
     ///
     /// This method crucially does not cause cache-line conflicts with the underlying data-store

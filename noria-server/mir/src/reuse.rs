@@ -277,7 +277,7 @@ mod tests {
             MirNodeType::Leaf {
                 node: c.clone(),
                 keys: vec![Column::from("ba")],
-                operator: None,
+                operators: vec![nom_sql::Operator::Equal],
             },
             vec![],
             vec![],

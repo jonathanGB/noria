@@ -348,6 +348,7 @@
 //! - [id=1, title=Hello world, votes=42]
 //! + [id=1, title=Hello world, votes=43]
 //! ```
+#![feature(iter_is_partitioned)]
 #![feature(allow_fail)]
 #![feature(optin_builtin_traits)]
 #![feature(box_patterns)]

@@ -10,6 +10,7 @@ use noria::{ReadQuery, ReadReply, Tagged};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem;
+use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::time;
 use stream_cancel::Valve;
 use tokio::prelude::*;
@@ -104,45 +105,130 @@ fn handle_message(
                 ret.resize(keys.len(), Vec::new());
 
                 use nom_sql::Operator;
-                let found : Vec<_> = match &reader.get_operator() {
-                    Some(op) if *op == Operator::Greater || *op == Operator::GreaterOrEqual || *op == Operator::Less || *op == Operator::LessOrEqual => {
-                        use std::ops::Bound::{Excluded, Included, Unbounded};
+                let (cols, operators) = reader.get_operators();
 
-                        keys
-                            .iter_mut()
-                            .map(|key| {
-                                let range = match op {
-                                    Operator::Greater => (Excluded(&key[0]), Unbounded),
-                                    Operator::GreaterOrEqual => (Included(&key[0]), Unbounded),
-                                    Operator::Less => (Unbounded, Excluded(&key[0])),
-                                    Operator::LessOrEqual => (Unbounded, Included(&key[0])),
-                                    _ => unimplemented!(),
-                                };
+                let found : Vec<_> = if operators.iter().all(|op| *op == Operator::Equal) {
+                    keys
+                        .iter_mut()
+                        .map(|key| {
+                            let rs = reader.try_find_and(key, dup).map(|r| r.0);
+                            (key, rs)
+                        })
+                        .enumerate()
+                        .collect()
+                } else if operators.len() == 1 && operators[0] != Operator::Equal { 
+                    keys
+                        .iter_mut()
+                        .map(|key| {
+                            let range = match operators[0] {
+                                Operator::Greater => (Excluded(vec![key[0].clone()]), Unbounded),
+                                Operator::GreaterOrEqual => (Included(vec![key[0].clone()]), Unbounded),
+                                Operator::Less => (Unbounded, Excluded(vec![key[0].clone()])),
+                                Operator::LessOrEqual => (Unbounded, Included(vec![key[0].clone()])),
+                                _ => unimplemented!(),
+                            };
 
-                                let rs = reader.try_find_range_and(range, dup).map(|r| r.0);
-                                let rs = match rs {
-                                    Ok(Some(res)) => {
-                                        let flattened_res : Vec<Vec<_>> = res.into_iter().flatten().collect();
-                                        Ok(Some(flattened_res))
+                            let rs = reader.try_find_range_and(range, key, dup).map(|r| r.0);
+                            let rs = match rs {
+                                Ok(Some(res)) => {
+                                    let flattened_res : Vec<Vec<_>> = res.into_iter().flatten().collect();
+                                    Ok(Some(flattened_res))
+                                },
+                                _ => Err(()),
+                            };
+                            (key, rs)
+                        })
+                        .enumerate()
+                        .collect()
+                } else if operators.len() > 1 && 
+                    operators.iter().is_partitioned(|op| *op == Operator::Equal) {
+                    
+                    keys
+                        .iter_mut()
+                        .map(|key| {
+                            let mut inequality_col = None;
+                            let mut equality_keys = vec![];
+                            let mut lower_bound = Unbounded;
+                            let mut higher_bound = Unbounded;
+                            for (i, op) in operators.iter().enumerate() {
+                                let keyi = key[i].clone();
+
+                                if *op == Operator::Equal {
+                                    equality_keys.push(keyi);
+                                    continue;
+                                }
+
+                                match inequality_col {
+                                    // TODO(jonathangb): check inequality on same col.
+                                    Some(_) => {
+                                        match op {
+                                            Operator::Less => higher_bound = Excluded(keyi),
+                                            Operator::LessOrEqual => higher_bound = Included(keyi),
+                                            Operator::Greater => lower_bound = Excluded(keyi),
+                                            Operator::GreaterOrEqual => lower_bound = Included(keyi),
+                                            _ => {},
+                                        };
                                     },
-                                    _ => Err(()),
-                                };
-                                (key, rs)
-                            })
-                            .enumerate()
-                            .collect()
-                    },
-                    _ => {
-                        // first do non-blocking reads for all keys to see if we can return immediately
-                        keys
-                            .iter_mut()
-                            .map(|key| {
-                                let rs = reader.try_find_and(key, dup).map(|r| r.0);
-                                (key, rs)
-                            })
-                            .enumerate()
-                            .collect()
-                    },
+                                    None => {
+                                        inequality_col = Some(cols[i]);
+                                        match op {
+                                            Operator::Less => higher_bound = Excluded(keyi),
+                                            Operator::LessOrEqual => higher_bound = Included(keyi),
+                                            Operator::Greater => lower_bound = Excluded(keyi),
+                                            Operator::GreaterOrEqual => lower_bound = Included(keyi),
+                                            _ => {},
+                                        };
+                                    },
+                                }
+                            }
+
+                            let mut first_bound = equality_keys.clone();
+                            let first_bound = match lower_bound {
+                                Included(bound) => {
+                                    first_bound.push(bound);
+                                    Included(first_bound)
+                                },
+                                Excluded(bound) => {
+                                    first_bound.push(bound);
+                                    Excluded(first_bound)
+                                },
+                                Unbounded => {
+                                    let higher_bound = match higher_bound {
+                                        Included(ref bound) => bound,
+                                        Excluded(ref bound) => bound,
+                                        Unbounded => unreachable!(),
+                                    };
+                                    first_bound.push(common::DataType::min_value(higher_bound));
+                                    Included(first_bound)
+                                },
+                            };
+                            let mut second_bound = equality_keys.clone();
+                            let second_bound = match higher_bound {
+                                Included(bound) => {
+                                    second_bound.push(bound);
+                                    Included(second_bound)
+                                },
+                                Excluded(bound) => {
+                                    second_bound.push(bound);
+                                    Excluded(second_bound)
+                                },
+                                Unbounded => Unbounded,
+                            };
+
+                            let rs = reader.try_find_range_and((first_bound, second_bound), &equality_keys[..], dup).map(|r| r.0);
+                            let rs = match rs {
+                                Ok(Some(res)) => {
+                                    let flattened_res : Vec<Vec<_>> = res.into_iter().flatten().collect();
+                                    Ok(Some(flattened_res))
+                                },
+                                _ => Err(()),
+                            };
+                            (key, rs)
+                        })
+                        .enumerate()
+                        .collect()
+                } else {
+                    unimplemented!()
                 };
 
                 let mut ready = true;

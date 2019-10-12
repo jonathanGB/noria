@@ -282,7 +282,7 @@ impl SqlToMirConverter {
             MirNodeType::Leaf {
                 node: parent.clone(),
                 keys: Vec::from(params),
-                operator: None,
+                operators: vec![nom_sql::Operator::Equal; params.len()],
             },
             vec![n],
             vec![],
@@ -367,7 +367,7 @@ impl SqlToMirConverter {
                 MirNodeType::Leaf {
                     node: final_node.clone(),
                     keys: vec![],
-                    operator: None,
+                    operators: vec![],
                 },
                 vec![final_node.clone()],
                 vec![],
@@ -1910,17 +1910,13 @@ impl SqlToMirConverter {
                         c
                     })
                     .collect();
-                println!("params:\n{:?}\n\n", &qg.parameters());
                 let query_params = if has_bogokey {
                     vec![Column::new(None, "bogokey")]
                 } else {
                     qg.parameters().into_iter().map(|(col, _)| Column::from(col)).collect()
                 };
-
-                let operator = match &st.where_clause {
-                    Some(ConditionExpression::ComparisonOp(ConditionTree {operator, ..})) => Some(operator.clone()),
-                    _ => None,
-                };
+                // TODO(jonathangb): keep the columns.
+                let operators = qg.parameters().into_iter().map(|(_, op)| op.clone()).collect();
 
                 let leaf_node = MirNode::new(
                     name,
@@ -1929,7 +1925,7 @@ impl SqlToMirConverter {
                     MirNodeType::Leaf {
                         node: leaf_project_node.clone(),
                         keys: query_params,
-                        operator,
+                        operators,
                     },
                     vec![leaf_project_node.clone()],
                     vec![],

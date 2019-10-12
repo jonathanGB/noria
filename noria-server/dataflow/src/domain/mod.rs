@@ -940,7 +940,7 @@ impl Domain {
 
                                 let mut n = self.nodes[node].borrow_mut();
                                 n.with_reader_mut(|r| {
-                                    r_part.set_operator(r.get_operator());
+                                    r_part.set_operators(r.get_operators());
                                     assert!(self
                                         .readers
                                         .lock()

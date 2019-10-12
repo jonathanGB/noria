@@ -51,6 +51,8 @@ fn new_inner(
         }};
     }
 
+    let mut key = Vec::from(key);
+    key.dedup();
     let (r, w) = match key.len() {
         0 => unreachable!(),
         1 => make!(Single),
@@ -61,7 +63,7 @@ fn new_inner(
     let w = WriteHandle {
         partial: trigger.is_some(),
         handle: w,
-        key: Vec::from(key),
+        key: key.clone(),
         cols,
         contiguous,
         mem_size: 0,
@@ -69,8 +71,8 @@ fn new_inner(
     let r = SingleReadHandle {
         handle: r,
         trigger,
-        key: Vec::from(key),
-        operator: None,
+        key: key.clone(),
+        operators: vec![],
     };
 
     (r, w)
@@ -294,7 +296,7 @@ pub struct SingleReadHandle {
     handle: multir::Handle,
     trigger: Option<Arc<dyn Fn(&[DataType]) -> bool + Send + Sync>>,
     key: Vec<usize>,
-    operator: Option<nom_sql::Operator>,
+    operators: Vec<nom_sql::Operator>,
 }
 
 impl SingleReadHandle {
@@ -309,12 +311,12 @@ impl SingleReadHandle {
         (*self.trigger.as_ref().unwrap())(key)
     }
 
-    pub fn get_operator(&self) -> &Option<nom_sql::Operator> {
-        &self.operator
+    pub fn get_operators(&self) -> (&Vec<usize>, &Vec<nom_sql::Operator>) {
+        (&self.key, &self.operators)
     }
 
-    pub fn set_operator(&mut self, operator: Option<nom_sql::Operator>) {
-        self.operator = operator;
+    pub fn set_operators(&mut self, operators: Vec<nom_sql::Operator>) {
+        self.operators = operators;
     }
 
     /// Find all entries that matched the given conditions.
@@ -340,13 +342,13 @@ impl SingleReadHandle {
             })
     }
 
-    pub fn try_find_range_and<F, T, R>(&self, range: R, then: F) -> Result<(Option<Vec<T>>, i64), ()>
+    pub fn try_find_range_and<F, T, R>(&self, range: R, equalities: &[DataType], then: F) -> Result<(Option<Vec<T>>, i64), ()>
     where
         F: Fn(&[Vec<DataType>]) -> T,
-        R: RangeBounds<common::DataType>,
+        R: RangeBounds<Vec<DataType>>,
         {
             self.handle
-                .meta_get_range_and(range, &then)
+                .meta_get_range_and(range, equalities, &then)
                 .ok_or(())
                 .map(|(mut records, meta)| {
                     if records.is_none() && self.trigger.is_none() {

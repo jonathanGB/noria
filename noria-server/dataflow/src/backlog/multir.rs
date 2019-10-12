@@ -1,5 +1,6 @@
 use common::DataType;
 use evmap;
+use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::ops::RangeBounds;
 
 #[derive(Clone)]
@@ -59,17 +60,61 @@ impl Handle {
         }
     }
 
-    pub(super) fn meta_get_range_and<F, T, R>(&self, range: R, then: F) -> Option<(Option<Vec<T>>, i64)>
+    pub(super) fn meta_get_range_and<F, T, R>(&self, range: R, equalities: &[DataType], then: F) -> Option<(Option<Vec<T>>, i64)>
     where
         F: Fn(&[Vec<DataType>]) -> T,
-        R: RangeBounds<common::DataType>,
+        R: RangeBounds<Vec<DataType>>,
     {
+
         match *self {
             Handle::Single(ref h) => {
-                h.meta_get_range_and(range, then)
+                let start = range.start_bound();
+                let end = range.end_bound();
+
+                let start = match start {
+                    Included(r) => Included(r[0].to_owned()),
+                    Excluded(r) => Excluded(r[0].to_owned()),
+                    Unbounded => Unbounded,
+                };
+                let end = match end {
+                    Included(r) => Included(r[0].to_owned()),
+                    Excluded(r) => Excluded(r[0].to_owned()),
+                    Unbounded => Unbounded,           
+                };
+
+                h.meta_get_range_and((start, end), |_| true, then)
             },
-            // TODO(jonathangb): Consider handling other types of handle.
-            _ => unimplemented!(),
+            Handle::Double(ref h) => {
+                let start = range.start_bound();
+                let end = range.end_bound();
+
+                let start = match start {
+                    Included(r) => Included((r[0].to_owned(), r[1].to_owned())),
+                    Excluded(r) => Excluded((r[0].to_owned(), r[1].to_owned())),
+                    Unbounded => unreachable!(),
+                };
+
+                match end {
+                    Included(r) => h.meta_get_range_and((start, Included((r[0].to_owned(), r[1].to_owned()))), |_| true, then),
+                    Excluded(r) => h.meta_get_range_and((start, Excluded((r[0].to_owned(), r[1].to_owned()))), |_| true, then),
+                    Unbounded => h.meta_get_range_and((start, Unbounded), |(&(ref eq1, _), _)| *eq1 == equalities[0], then),      
+                }
+            },
+            Handle::Many(ref h) => {
+                if range.end_bound() == Unbounded {
+                    h.meta_get_range_and(range, |(ref keys, _)| {
+                        for (i, equality) in equalities.iter().enumerate() {
+                            if keys[i] != *equality {
+                                return false;
+                            }
+                        }
+
+                        return true;
+                    }, then)
+                } else {
+                    h.meta_get_range_and(range, |_| true, then)
+                }
+            },
         }
     }
 }
