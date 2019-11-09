@@ -1,21 +1,23 @@
+use backlog::RangeLookupMiss;
 use common::DataType;
 use evmap;
+use unbounded_interval_tree::IntervalTree;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::ops::RangeBounds;
 
 #[derive(Clone)]
 pub(super) enum Handle {
-    Single(evmap::ReadHandle<DataType, Vec<DataType>, i64>),
-    Double(evmap::ReadHandle<(DataType, DataType), Vec<DataType>, i64>),
-    Many(evmap::ReadHandle<Vec<DataType>, Vec<DataType>, i64>),
+    Single(evmap::ReadHandle<DataType, Vec<DataType>, i64>, IntervalTree<DataType>),
+    Double(evmap::ReadHandle<(DataType, DataType), Vec<DataType>, i64>, IntervalTree<(DataType, DataType)>),
+    Many(evmap::ReadHandle<Vec<DataType>, Vec<DataType>, i64>, IntervalTree<Vec<DataType>>),
 }
 
 impl Handle {
     pub(super) fn len(&self) -> usize {
         match *self {
-            Handle::Single(ref h) => h.len(),
-            Handle::Double(ref h) => h.len(),
-            Handle::Many(ref h) => h.len(),
+            Handle::Single(ref h, _) => h.len(),
+            Handle::Double(ref h, _) => h.len(),
+            Handle::Many(ref h, _) => h.len(),
         }
     }
 
@@ -24,11 +26,11 @@ impl Handle {
         F: FnOnce(&[Vec<DataType>]) -> T,
     {
         match *self {
-            Handle::Single(ref h) => {
+            Handle::Single(ref h, _) => {
                 assert_eq!(key.len(), 1);
                 h.meta_get_and(&key[0], then)
             }
-            Handle::Double(ref h) => {
+            Handle::Double(ref h, _) => {
                 assert_eq!(key.len(), 2);
                 // we want to transmute &[T; 2] to &(T, T), but that's not actually safe
                 // we're not guaranteed that they have the same memory layout
@@ -56,18 +58,19 @@ impl Handle {
                     v
                 }
             }
-            Handle::Many(ref h) => h.meta_get_and(key, then),
+            Handle::Many(ref h, _) => h.meta_get_and(key, then),
         }
     }
 
-    pub(super) fn meta_get_range_and<F, T, R>(&self, range: R, equalities: &[DataType], then: F) -> Option<(Option<Vec<T>>, i64)>
+    pub(super) fn meta_get_range_and<F, T, R>(&self, range: R, then: F) -> Result<(Option<Vec<T>>, i64), Option<RangeLookupMiss>>
     where
         F: Fn(&[Vec<DataType>]) -> T,
         R: RangeBounds<Vec<DataType>>,
     {
 
         match *self {
-            Handle::Single(ref h) => {
+            Handle::Single(ref h, ref t) => {
+                println!("Single!");
                 let start = range.start_bound();
                 let end = range.end_bound();
 
@@ -82,37 +85,62 @@ impl Handle {
                     Unbounded => Unbounded,           
                 };
 
-                h.meta_get_range_and((start, end), |_| true, then)
+                let range = (start, end);
+                let diff = t.get_interval_difference(range.clone());
+                println!("diff: {:?}", diff);
+                if diff.is_empty() {
+                    match h.meta_get_range_and(range, then) {
+                        Some(res) => Ok(res),
+                        None => Err(None),
+                    }
+                } else {
+                    Err(Some(RangeLookupMiss::Single(diff)))
+                }
             },
-            Handle::Double(ref h) => {
+            Handle::Double(ref h, ref t) => {
+                println!("Double!");
                 let start = range.start_bound();
                 let end = range.end_bound();
 
                 let start = match start {
+                    Included(ref r) => Included((r[0].to_owned(), r[1].to_owned())),
+                    Excluded(ref r) => Excluded((r[0].to_owned(), r[1].to_owned())),
+                    Unbounded => unreachable!(),
+                };
+
+                let end = match end {
                     Included(r) => Included((r[0].to_owned(), r[1].to_owned())),
                     Excluded(r) => Excluded((r[0].to_owned(), r[1].to_owned())),
                     Unbounded => unreachable!(),
                 };
 
-                match end {
-                    Included(r) => h.meta_get_range_and((start, Included((r[0].to_owned(), r[1].to_owned()))), |_| true, then),
-                    Excluded(r) => h.meta_get_range_and((start, Excluded((r[0].to_owned(), r[1].to_owned()))), |_| true, then),
-                    Unbounded => h.meta_get_range_and((start, Unbounded), |(&(ref eq1, _), _)| *eq1 == equalities[0], then),      
+                let range = (start, end);
+                let diff = t.get_interval_difference(range.clone());
+                println!("diff: {:?}", diff);
+                if diff.is_empty() {
+                    match h.meta_get_range_and(range, then) {
+                        Some(res) => Ok(res),
+                        None => Err(None),
+                    }
+                } else {
+                    Err(Some(RangeLookupMiss::Double(diff)))
                 }
             },
-            Handle::Many(ref h) => {
-                if range.end_bound() == Unbounded {
-                    h.meta_get_range_and(range, |(ref keys, _)| {
-                        for (i, equality) in equalities.iter().enumerate() {
-                            if keys[i] != *equality {
-                                return false;
-                            }
-                        }
+            Handle::Many(ref h, ref t) => {
+                println!("Many!");
+                assert!(range.start_bound() != Unbounded);
+                assert!(range.end_bound() != Unbounded);
 
-                        return true;
-                    }, then)
+                let range = (range.start_bound().cloned(), range.end_bound().cloned());
+                let diff = t.get_interval_difference(range.clone());
+                println!("diff: {:?}", diff);
+                if diff.is_empty() {
+                    match h.meta_get_range_and(range, then) {
+                        Some(res) => Ok(res),
+                        None => Err(None),
+                    }
                 } else {
-                    h.meta_get_range_and(range, |_| true, then)
+                    Err(Some(RangeLookupMiss::Many(diff)))
                 }
             },
         }

@@ -907,7 +907,7 @@ impl Domain {
                                         tx
                                     })
                                     .collect::<Vec<_>>();
-                                let (r_part, w_part) =
+                                let (mut r_part, w_part) =
                                     backlog::new_partial(cols, &k[..], move |miss| {
                                         let n = txs.len();
                                         let tx = if n == 1 {
@@ -922,6 +922,7 @@ impl Domain {
 
                                 let mut n = self.nodes[node].borrow_mut();
                                 n.with_reader_mut(|r| {
+                                    r_part.set_operators(r.get_operators());
                                     assert!(self
                                         .readers
                                         .lock()

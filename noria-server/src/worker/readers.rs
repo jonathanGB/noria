@@ -1,6 +1,7 @@
 use async_bincode::AsyncBincodeStream;
 use dataflow::prelude::DataType;
 use dataflow::prelude::*;
+use dataflow::RangeLookupMiss;
 use dataflow::Readers;
 use dataflow::SingleReadHandle;
 use futures::future::{self, Either};
@@ -94,6 +95,7 @@ fn handle_message(
             mut keys,
             block,
         } => {
+            let mut missing_ranges = Vec::new();
             let immediate = READERS.with(|readers_cache| {
                 let mut readers_cache = readers_cache.borrow_mut();
                 let reader = readers_cache.entry(target).or_insert_with(|| {
@@ -106,7 +108,7 @@ fn handle_message(
 
                 use nom_sql::Operator;
                 let (cols, operators) = reader.get_operators();
-
+                println!("operators: {:?}", operators);
                 let found : Vec<_> = if operators.iter().all(|op| *op == Operator::Equal) {
                     keys
                         .iter_mut()
@@ -127,22 +129,25 @@ fn handle_message(
                                 Operator::LessOrEqual => (Unbounded, Included(vec![key[0].clone()])),
                                 _ => unimplemented!(),
                             };
-
-                            let rs = reader.try_find_range_and(range, key, dup).map(|r| r.0);
+                            let rs = reader.try_find_range_and(range, dup).map(|r| r.0);
                             let rs = match rs {
                                 Ok(Some(res)) => {
                                     let flattened_res : Vec<Vec<_>> = res.into_iter().flatten().collect();
                                     Ok(Some(flattened_res))
                                 },
-                                _ => Err(()),
+                                Ok(None) => Ok(None),
+                                Err(None) => Err(()),
+                                Err(Some(miss)) => {
+                                    missing_ranges.push(miss);
+                                    Ok(None)
+                                }
                             };
                             (key, rs)
                         })
                         .enumerate()
                         .collect()
-                } else if operators.len() > 1 && 
-                    operators.iter().is_partitioned(|op| *op == Operator::Equal) {
-                    
+                } else if operators.len() > 1 {
+                    assert!(operators.iter().is_partitioned(|op| *op == Operator::Equal));
                     keys
                         .iter_mut()
                         .map(|key| {
@@ -183,20 +188,20 @@ fn handle_message(
                             }
 
                             let mut first_bound = equality_keys.clone();
-                            let first_bound = match lower_bound {
+                            let first_bound = match &lower_bound {
                                 Included(bound) => {
-                                    first_bound.push(bound);
+                                    first_bound.push(bound.clone());
                                     Included(first_bound)
                                 },
                                 Excluded(bound) => {
-                                    first_bound.push(bound);
+                                    first_bound.push(bound.clone());
                                     Excluded(first_bound)
                                 },
                                 Unbounded => {
-                                    let higher_bound = match higher_bound {
-                                        Included(ref bound) => bound,
-                                        Excluded(ref bound) => bound,
-                                        Unbounded => unreachable!(),
+                                    let higher_bound = match &higher_bound {
+                                        Included(bound) => bound,
+                                        Excluded(bound) => bound,
+                                        Unbounded => unreachable!(), // We can't have both lower and higher unbounded at once.
                                     };
                                     first_bound.push(common::DataType::min_value(higher_bound));
                                     Included(first_bound)
@@ -212,16 +217,29 @@ fn handle_message(
                                     second_bound.push(bound);
                                     Excluded(second_bound)
                                 },
-                                Unbounded => Unbounded,
+                                Unbounded => {
+                                    let lower_bound = match lower_bound {
+                                        Included(ref bound) => bound,
+                                        Excluded(ref bound) => bound,
+                                        Unbounded => unreachable!(), // We can't have both lower and higher unbounded at once.
+                                    };
+                                    second_bound.push(common::DataType::max_value(lower_bound));
+                                    Included(second_bound)
+                                }
                             };
 
-                            let rs = reader.try_find_range_and((first_bound, second_bound), &equality_keys[..], dup).map(|r| r.0);
+                            let rs = reader.try_find_range_and((first_bound, second_bound), dup).map(|r| r.0);
                             let rs = match rs {
                                 Ok(Some(res)) => {
                                     let flattened_res : Vec<Vec<_>> = res.into_iter().flatten().collect();
                                     Ok(Some(flattened_res))
-                                },
-                                _ => Err(()),
+                                }
+                                Ok(None) => Ok(None),
+                                Err(None) => Err(()),
+                                Err(Some(miss)) => {
+                                    missing_ranges.push(miss);
+                                    Ok(None)
+                                }
                             };
                             (key, rs)
                         })
@@ -268,19 +286,28 @@ fn handle_message(
                     });
                 }
 
+                // TODO(jonathangb): trigger range replays.
                 // trigger backfills for all the keys we missed on for later
-                for key in &keys {
-                    if !key.is_empty() {
-                        reader.trigger(key);
+                if !missing_ranges.is_empty() {
+                    for missing_range in &missing_ranges {
+                        // TODO(jonathangb): trigger replay.
+                        //reader.trigger(missing_range);
+                    }
+                } else {
+                    for key in &keys {
+                        if !key.is_empty() {
+                            reader.trigger(key);
+                        }
                     }
                 }
 
-                Err((keys, ret))
+
+                Err((keys, ret, missing_ranges))
             });
 
             match immediate {
                 Ok(reply) => Either::A(Either::A(future::ok(reply))),
-                Err((keys, ret)) => {
+                Err((keys, ret, missing_ranges)) => {
                     if !block {
                         Either::A(Either::A(future::ok(Tagged {
                             tag,
@@ -299,6 +326,7 @@ fn handle_message(
                             retry: tokio_os_timer::Interval::new(retry).unwrap(),
                             trigger_timeout: trigger,
                             next_trigger: now,
+                            missing_ranges,
                         }))
                     }
                 }
@@ -332,6 +360,7 @@ struct BlockingRead {
     retry: tokio_os_timer::Interval,
     trigger_timeout: time::Duration,
     next_trigger: time::Instant,
+    missing_ranges: Vec<RangeLookupMiss>,
 }
 
 impl Future for BlockingRead {
@@ -359,7 +388,7 @@ impl Future for BlockingRead {
                 for (i, key) in self.keys.iter_mut().enumerate() {
                     if key.is_empty() {
                         // already have this value
-                    } else {
+                    } else { // TODO(jonathangb): Add range partial.
                         // note that this *does* mean we'll trigger replay multiple times for things
                         // that miss and aren't replayed in time, which is a little sad. but at the
                         // same time, that replay trigger will just be ignored by the target domain.

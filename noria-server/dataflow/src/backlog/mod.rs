@@ -2,6 +2,7 @@ use common::SizeOf;
 use prelude::*;
 use rand::prelude::*;
 use std::borrow::Cow;
+use std::ops::Bound;
 use std::sync::Arc;
 use std::ops::RangeBounds;
 
@@ -43,11 +44,24 @@ fn new_inner(
     macro_rules! make {
         ($variant:tt) => {{
             use evmap;
+            use unbounded_interval_tree::IntervalTree;
             let (r, w) = evmap::Options::default()
                 .with_meta(-1)
                 .construct();
-
-            (multir::Handle::$variant(r), multiw::Handle::$variant(w))
+            let mut tree = IntervalTree::default();
+            // If there is no trigger, then we are fully-materialized.
+            // We can insert a single node to the interval tree that covers
+            // all possible intervals, which means that all intervals
+            // are covered by the materialized node.
+            if trigger.is_none() {
+                use std::ops::Bound::Unbounded;
+                tree.insert((Unbounded, Unbounded));
+            }
+            println!("Iterations:");
+            for interval in tree.iter() {
+                println!("{:?}", interval);
+            }
+            (multir::Handle::$variant(r, tree), multiw::Handle::$variant(w))
         }};
     }
 
@@ -290,6 +304,14 @@ impl SizeOf for WriteHandle {
     }
 }
 
+/// Signify which intervals are missing in the materialized.
+#[derive(PartialEq, Debug)]
+pub enum RangeLookupMiss {
+    Single(Vec<(Bound<DataType>, Bound<DataType>)>),
+    Double(Vec<(Bound<(DataType, DataType)>, Bound<(DataType, DataType)>)>),
+    Many(Vec<(Bound<Vec<DataType>>, Bound<Vec<DataType>>)>),
+}
+
 /// Handle to get the state of a single shard of a reader.
 #[derive(Clone)]
 pub struct SingleReadHandle {
@@ -316,6 +338,7 @@ impl SingleReadHandle {
     }
 
     pub fn set_operators(&mut self, operators: Vec<nom_sql::Operator>) {
+        println!("set_operators called");
         self.operators = operators;
     }
 
@@ -342,14 +365,13 @@ impl SingleReadHandle {
             })
     }
 
-    pub fn try_find_range_and<F, T, R>(&self, range: R, equalities: &[DataType], then: F) -> Result<(Option<Vec<T>>, i64), ()>
+    pub fn try_find_range_and<F, T, R>(&self, range: R, then: F) -> Result<(Option<Vec<T>>, i64), Option<RangeLookupMiss>>
     where
         F: Fn(&[Vec<DataType>]) -> T,
         R: RangeBounds<Vec<DataType>>,
         {
             self.handle
-                .meta_get_range_and(range, equalities, &then)
-                .ok_or(())
+                .meta_get_range_and(range, &then)
                 .map(|(mut records, meta)| {
                     if records.is_none() && self.trigger.is_none() {
                         records = Some(vec![then(&[])]);

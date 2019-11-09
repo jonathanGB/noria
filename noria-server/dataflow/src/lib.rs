@@ -1,3 +1,4 @@
+#![feature(bound_cloned)]
 #![feature(nll)]
 #![feature(box_syntax)]
 #![feature(box_patterns)]
@@ -35,6 +36,7 @@ extern crate stream_cancel;
 extern crate tempfile;
 extern crate timekeeper;
 extern crate tokio;
+extern crate unbounded_interval_tree;
 extern crate vec_map;
 
 crate mod backlog;
@@ -53,6 +55,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time;
 
+pub use backlog::RangeLookupMiss;
 pub use backlog::SingleReadHandle;
 pub type Readers =
     Arc<Mutex<HashMap<(petgraph::graph::NodeIndex, usize), backlog::SingleReadHandle>>>;
