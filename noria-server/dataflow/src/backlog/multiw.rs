@@ -1,31 +1,34 @@
-use super::{key_to_double, key_to_single, Key};
+use super::{key_to_double, key_to_single, Key, KeyRange, RangeLookupMiss};
 use evmap;
 use prelude::*;
+use std::ops::Bound::*;
+use std::sync::{Arc, Mutex};
+use unbounded_interval_tree::IntervalTree;
 
 pub(super) enum Handle {
-    Single(evmap::WriteHandle<DataType, Vec<DataType>, i64>),
-    Double(evmap::WriteHandle<(DataType, DataType), Vec<DataType>, i64>),
-    Many(evmap::WriteHandle<Vec<DataType>, Vec<DataType>, i64>),
+    Single(evmap::WriteHandle<DataType, Vec<DataType>, i64>, Arc<Mutex<IntervalTree<DataType>>>),
+    Double(evmap::WriteHandle<(DataType, DataType), Vec<DataType>, i64>, Arc<Mutex<IntervalTree<(DataType, DataType)>>>),
+    Many(evmap::WriteHandle<Vec<DataType>, Vec<DataType>, i64>, Arc<Mutex<IntervalTree<Vec<DataType>>>>),
 }
 
 impl Handle {
     pub fn is_empty(&self) -> bool {
         match *self {
-            Handle::Single(ref h) => h.is_empty(),
-            Handle::Double(ref h) => h.is_empty(),
-            Handle::Many(ref h) => h.is_empty(),
+            Handle::Single(ref h, _) => h.is_empty(),
+            Handle::Double(ref h, _) => h.is_empty(),
+            Handle::Many(ref h, _) => h.is_empty(),
         }
     }
 
     pub fn clear(&mut self, k: Key) {
         match *self {
-            Handle::Single(ref mut h) => {
+            Handle::Single(ref mut h, _) => {
                 h.clear(key_to_single(k).into_owned());
             }
-            Handle::Double(ref mut h) => {
+            Handle::Double(ref mut h, _) => {
                 h.clear(key_to_double(k).into_owned());
             }
-            Handle::Many(ref mut h) => {
+            Handle::Many(ref mut h, _) => {
                 h.clear(k.into_owned());
             }
         }
@@ -33,13 +36,13 @@ impl Handle {
 
     pub fn empty(&mut self, k: Key) {
         match *self {
-            Handle::Single(ref mut h) => {
+            Handle::Single(ref mut h, _) => {
                 h.empty(key_to_single(k).into_owned());
             }
-            Handle::Double(ref mut h) => {
+            Handle::Double(ref mut h, _) => {
                 h.empty(key_to_double(k).into_owned());
             }
-            Handle::Many(ref mut h) => {
+            Handle::Many(ref mut h, _) => {
                 h.empty(k.into_owned());
             }
         }
@@ -58,13 +61,13 @@ impl Handle {
 
     pub fn refresh(&mut self) {
         match *self {
-            Handle::Single(ref mut h) => {
+            Handle::Single(ref mut h, _) => {
                 h.refresh();
             }
-            Handle::Double(ref mut h) => {
+            Handle::Double(ref mut h, _) => {
                 h.refresh();
             }
-            Handle::Many(ref mut h) => {
+            Handle::Many(ref mut h, _) => {
                 h.refresh();
             }
         }
@@ -75,11 +78,11 @@ impl Handle {
         F: FnOnce(&[Vec<DataType>]) -> T,
     {
         match *self {
-            Handle::Single(ref h) => {
+            Handle::Single(ref h, _) => {
                 assert_eq!(key.len(), 1);
                 h.meta_get_and(&key[0], then)
             }
-            Handle::Double(ref h) => {
+            Handle::Double(ref h, _) => {
                 assert_eq!(key.len(), 2);
                 // we want to transmute &[T; 2] to &(T, T), but that's not actually safe
                 // we're not guaranteed that they have the same memory layout
@@ -107,17 +110,98 @@ impl Handle {
                     v
                 }
             }
-            Handle::Many(ref h) => h.meta_get_and(&key[..], then),
+            Handle::Many(ref h, _) => h.meta_get_and(&key[..], then),
         }
     }
 
+    pub fn meta_get_range_and<F, T>(&self, range: KeyRange, then: F) -> Result<(Option<Vec<T>>, i64), Option<Vec<RangeLookupMiss>>>
+    where
+        F: Fn(&[Vec<DataType>]) -> T,
+    {
+
+        match *self {
+            Handle::Single(ref h, ref t) => {
+                println!("Single!");
+
+                if let RangeLookupMiss::Single(start, end) = *range {
+                    let range = (start, end);
+                    let diff : Vec<_> = t.lock().unwrap()
+                        .get_interval_difference(range.clone())
+                        .into_iter()
+                        .map(|(start_miss, end_miss)| RangeLookupMiss::Single(start_miss, end_miss))
+                        .collect();
+                    println!("diff: {:?}", diff);
+                    if diff.is_empty() {
+                        match h.meta_get_range_and(range, then) {
+                            Some(res) => Ok(res),
+                            None => Err(None),
+                        }
+                    } else {
+                        Err(Some(diff))
+                    }
+                } else {
+                    unreachable!()
+                }
+            }
+            Handle::Double(ref h, ref t) => {
+                println!("Double!");
+
+                if let RangeLookupMiss::Double(start, end) = *range {
+                    let range = (start, end);
+                    let diff : Vec<_> = t.lock().unwrap()
+                        .get_interval_difference(range.clone())
+                        .into_iter()
+                        .map(|(start_miss, end_miss)| RangeLookupMiss::Double(start_miss, end_miss))
+                        .collect();
+                    println!("diff: {:?}", diff);
+                    if diff.is_empty() {
+                        match h.meta_get_range_and(range, then) {
+                            Some(res) => Ok(res),
+                            None => Err(None),
+                        }
+                    } else {
+                        Err(Some(diff))
+                    }
+                } else {
+                    unreachable!()
+                }
+            }
+            Handle::Many(ref h, ref t) => {
+                println!("Many!");
+
+                if let RangeLookupMiss::Many(start, end) = *range {
+                    let range = (start, end);
+                    let diff : Vec<_> = t.lock().unwrap()
+                        .get_interval_difference(range.clone())
+                        .into_iter()
+                        .map(|(start_miss, end_miss)| RangeLookupMiss::Many(start_miss, end_miss))
+                        .collect();
+                    println!("diff: {:?}", diff);
+                    if diff.is_empty() {
+                        match h.meta_get_range_and(range, then) {
+                            Some(res) => Ok(res),
+                            None => Err(None),
+                        }
+                    } else {
+                        Err(Some(diff))
+                    }
+                } else {
+                    unreachable!()
+                }
+            }
+        }
+    }
+
+    // TODO(jonathangb): On add, do we want to update the interval tree?
+    // Updating here seems to have a problem, in that the tree and the evmap
+    // will momentarily not be in synced (the evmap is not refreshed yet).
     pub fn add<I>(&mut self, key: &[usize], cols: usize, rs: I) -> isize
     where
         I: IntoIterator<Item = Record>,
     {
         let mut memory_delta = 0isize;
         match *self {
-            Handle::Single(ref mut h) => {
+            Handle::Single(ref mut h, ref mut t) => {
                 assert_eq!(key.len(), 1);
                 for r in rs {
                     debug_assert!(r.len() >= cols);
@@ -137,7 +221,7 @@ impl Handle {
                     }
                 }
             }
-            Handle::Double(ref mut h) => {
+            Handle::Double(ref mut h, ref mut t) => {
                 assert_eq!(key.len(), 2);
                 for r in rs {
                     debug_assert!(r.len() >= cols);
@@ -153,7 +237,7 @@ impl Handle {
                     }
                 }
             }
-            Handle::Many(ref mut h) => {
+            Handle::Many(ref mut h, ref mut t) => {
                 for r in rs {
                     debug_assert!(r.len() >= cols);
                     let key = key.iter().map(|&k| &r[k]).cloned().collect();

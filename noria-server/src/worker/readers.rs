@@ -291,12 +291,12 @@ fn handle_message(
                 if !missing_ranges.is_empty() {
                     for missing_range in &missing_ranges {
                         // TODO(jonathangb): trigger replay.
-                        //reader.trigger(missing_range);
+                        reader.trigger(missing_range);
                     }
                 } else {
                     for key in &keys {
                         if !key.is_empty() {
-                            reader.trigger(key);
+                            reader.trigger(&RangeLookupMiss::Point(*key));
                         }
                     }
                 }

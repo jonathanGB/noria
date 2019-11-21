@@ -22,6 +22,9 @@ use timekeeper::{RealTime, SimpleTracker, ThreadTime, Timer, TimerSet};
 use tokio::{self, prelude::*};
 use Readers;
 
+use backlog::RangeLookupMiss;
+
+
 #[derive(Debug)]
 pub enum PollEvent {
     ResumePolling,
@@ -229,7 +232,7 @@ pub struct Domain {
     mode: DomainMode,
     waiting: Map<Waiting>,
     replay_paths: HashMap<Tag, ReplayPath>,
-    reader_triggered: Map<HashSet<Vec<DataType>>>,
+    reader_triggered: Map<HashSet<RangeLookupMiss>>,
     timed_purges: VecDeque<TimedPurge>,
 
     replay_paths_by_dst: Map<HashMap<Vec<usize>, Vec<Tag>>>,
@@ -305,7 +308,7 @@ impl Domain {
                 self.delayed_for_self
                     .push_back(box Packet::RequestPartialReplay {
                         tag,
-                        key,
+                        RangeLookupMiss::Point(key),
                         unishard: true, // local replays are necessarily single-shard
                     });
                 continue;
@@ -375,7 +378,7 @@ impl Domain {
         self.find_tags_and_replay(miss_key, miss_columns, miss_in);
     }
 
-    fn send_partial_replay_request(&mut self, tag: Tag, key: Vec<DataType>) {
+    fn send_partial_replay_request(&mut self, tag: Tag, key: RangeLookupMiss) {
         debug_assert!(self.concurrent_replays < self.max_concurrent_replays);
         if let TriggerEndpoint::End {
             source,
@@ -449,7 +452,7 @@ impl Domain {
         }
     }
 
-    fn request_partial_replay(&mut self, tag: Tag, key: Vec<DataType>) {
+    fn request_partial_replay(&mut self, tag: Tag, key: RangeLookupMiss) {
         if self.concurrent_replays < self.max_concurrent_replays {
             assert_eq!(self.replay_request_queue.len(), 0);
             self.send_partial_replay_request(tag, key);
@@ -910,14 +913,29 @@ impl Domain {
                                 let (mut r_part, w_part) =
                                     backlog::new_partial(cols, &k[..], move |miss| {
                                         let n = txs.len();
-                                        let tx = if n == 1 {
-                                            &txs[0]
+                                        if n == 1 {
+                                            let tx = &txs[0];
+                                            tx.unbounded_send(miss.clone()).is_ok()
                                         } else {
                                             // TODO: compound reader
-                                            assert_eq!(miss.len(), 1);
-                                            &txs[::shard_by(&miss[0], n)]
-                                        };
-                                        tx.unbounded_send(Vec::from(miss)).is_ok()
+                                            if let RangeLookupMiss::Point(p) = miss {
+                                                assert_eq!(p.len(), 1);
+
+                                                let tx = &txs[::shard_by(&p[0], n)];
+                                                tx.unbounded_send(miss.clone()).is_ok()
+                                            } else {
+                                                // TODO(jonathangb): if we have a range to replay,
+                                                // we can't currently shard it effectively. Hence,
+                                                // we have to send a replay to all the shards.
+                                                //
+                                                // TODO(jonathangb): Do we return true if all 
+                                                // of them are ok, or if one is ok? Right now,
+                                                // I assume all results must be ok.
+                                                txs.iter()
+                                                    .map(|tx| tx.unbounded_send(miss.clone()).is_ok())
+                                                    .all(|ok| ok)
+                                            }
+                                        }
                                     });
 
                                 let mut n = self.nodes[node].borrow_mut();
@@ -1044,11 +1062,18 @@ impl Domain {
                                     .expect("reader replay requested for non-materialized reader");
                                 // ensure that all writes have been applied
                                 w.swap();
-                                w.with_key(&key[..])
-                                    .try_find_and(|_| ())
-                                    .expect("reader replay requested for non-ready reader")
-                                    .0
-                                    .is_none()
+
+                                if let RangeLookupMiss::Point(p) = &key {
+                                    w.with_key(Cow::Borrowed(&key))
+                                        .try_find_and(|_| ())
+                                        .expect("reader replay requested for non-ready reader")
+                                        .0
+                                        .is_none()
+                                } else {
+                                    // TODO(jonathangb): lookup intervall tree.
+                                    unimplemented!()
+                                }
+ 
                             })
                             .expect("reader replay requested for non-reader node");
 
@@ -1401,7 +1426,7 @@ impl Domain {
                 node.with_reader_mut(|r| {
                     if let Some(wh) = r.writer_mut() {
                         for key in tp.keys {
-                            wh.mut_with_key(&key[..]).mark_hole();
+                            wh.mut_with_key(Cow::Borrowed(&RangeLookupMiss::Point(key.to_vec()))).mark_hole();
                         }
                         swap.insert(tp.view);
                     }

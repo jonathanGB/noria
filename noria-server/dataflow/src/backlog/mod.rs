@@ -3,7 +3,7 @@ use prelude::*;
 use rand::prelude::*;
 use std::borrow::Cow;
 use std::ops::Bound;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::ops::RangeBounds;
 
 /// Allocate a new end-user facing result table.
@@ -16,7 +16,7 @@ crate fn new(cols: usize, key: &[usize]) -> (SingleReadHandle, WriteHandle) {
 /// Misses in this table will call `trigger` to populate the entry, and retry until successful.
 crate fn new_partial<F>(cols: usize, key: &[usize], trigger: F) -> (SingleReadHandle, WriteHandle)
 where
-    F: Fn(&[DataType]) -> bool + 'static + Send + Sync,
+    F: Fn(&RangeLookupMiss) -> bool + 'static + Send + Sync,
 {
     new_inner(cols, key, Some(Arc::new(trigger)))
 }
@@ -24,7 +24,7 @@ where
 fn new_inner(
     cols: usize,
     key: &[usize],
-    trigger: Option<Arc<dyn Fn(&[DataType]) -> bool + Send + Sync>>,
+    trigger: Option<Arc<dyn Fn(&RangeLookupMiss) -> bool + Send + Sync>>,
 ) -> (SingleReadHandle, WriteHandle) {
     let contiguous = {
         let mut contiguous = true;
@@ -61,7 +61,8 @@ fn new_inner(
             for interval in tree.iter() {
                 println!("{:?}", interval);
             }
-            (multir::Handle::$variant(r, tree), multiw::Handle::$variant(w))
+            let tree = Arc::new(Mutex::new(tree));
+            (multir::Handle::$variant(r, tree), multiw::Handle::$variant(w, tree.clone()))
         }};
     }
 
@@ -126,39 +127,53 @@ crate struct WriteHandle {
 }
 
 type Key<'a> = Cow<'a, [DataType]>;
+type KeyRange<'a> = Cow<'a, RangeLookupMiss>;
 crate struct MutWriteHandleEntry<'a> {
     handle: &'a mut WriteHandle,
-    key: Key<'a>,
+    key: KeyRange<'a>,
 }
 crate struct WriteHandleEntry<'a> {
     handle: &'a WriteHandle,
-    key: Key<'a>,
+    key: KeyRange<'a>,
 }
 
 impl<'a> MutWriteHandleEntry<'a> {
     crate fn mark_filled(self) {
+        // TODO(jonathangb): noop. Do we want to keep it noop?
+        if !self.key.is_point() {
+            return;
+        }
+
+        let RangeLookupMiss::Point(p) = &*self.key;
         if let Some((None, _)) = self
             .handle
             .handle
-            .meta_get_and(Cow::Borrowed(&*self.key), |rs| rs.is_empty())
+            .meta_get_and(Cow::Borrowed(p), |rs| rs.is_empty())
         {
-            self.handle.handle.clear(self.key)
+            self.handle.handle.clear(Cow::Borrowed(p))
         } else {
             unreachable!("attempted to fill already-filled key");
         }
     }
 
     crate fn mark_hole(self) {
+        // TODO(jonathangb): noop for range queries. Do we want to keep it noop?
+        if !self.key.is_point() {
+            return;
+        }
+
+        let RangeLookupMiss::Point(p) = &*self.key;
+
         let size = self
             .handle
             .handle
-            .meta_get_and(Cow::Borrowed(&*self.key), |rs| {
+            .meta_get_and(Cow::Borrowed(p), |rs| {
                 rs.iter().map(SizeOf::deep_size_of).sum()
             })
             .map(|r| r.0.unwrap_or(0))
             .unwrap_or(0);
         self.handle.mem_size = self.handle.mem_size.checked_sub(size as usize).unwrap();
-        self.handle.handle.empty(self.key)
+        self.handle.handle.empty(Cow::Borrowed(p))
     }
 }
 
@@ -167,9 +182,15 @@ impl<'a> WriteHandleEntry<'a> {
     where
         F: FnMut(&[Vec<DataType>]) -> T,
     {
+        if !self.key.is_point() {
+            unreachable!("try_find_and is for equality queries, not range misses")
+        }
+
+        let RangeLookupMiss::Point(p) = &*self.key;
+
         self.handle
             .handle
-            .meta_get_and(self.key, &mut then)
+            .meta_get_and(Cow::Borrowed(p), &mut then)
             .ok_or(())
     }
 }
@@ -205,7 +226,7 @@ where
 impl WriteHandle {
     crate fn mut_with_key<'a, K>(&'a mut self, key: K) -> MutWriteHandleEntry<'a>
     where
-        K: Into<Key<'a>>,
+        K: Into<KeyRange<'a>>,
     {
         MutWriteHandleEntry {
             handle: self,
@@ -215,7 +236,7 @@ impl WriteHandle {
 
     crate fn with_key<'a, K>(&'a self, key: K) -> WriteHandleEntry<'a>
     where
-        K: Into<Key<'a>>,
+        K: Into<KeyRange<'a>>,
     {
         WriteHandleEntry {
             handle: self,
@@ -229,7 +250,7 @@ impl WriteHandle {
         R: Into<Cow<'a, [DataType]>>,
     {
         let key = key_from_record(&self.key[..], self.contiguous, record);
-        self.mut_with_key(key)
+        self.mut_with_key(Cow::Owned(RangeLookupMiss::Point(key.to_vec())))
     }
 
     crate fn entry_from_record<'a, R>(&'a self, record: R) -> WriteHandleEntry<'a>
@@ -237,7 +258,7 @@ impl WriteHandle {
         R: Into<Cow<'a, [DataType]>>,
     {
         let key = key_from_record(&self.key[..], self.contiguous, record);
-        self.with_key(key)
+        self.with_key(Cow::Owned(RangeLookupMiss::Point(key.to_vec())))
     }
 
     crate fn swap(&mut self) {
@@ -304,26 +325,36 @@ impl SizeOf for WriteHandle {
     }
 }
 
-/// Signify which intervals are missing in the materialized.
-#[derive(PartialEq, Debug)]
+/// Signify a missing interval in a materialized view.
+#[derive(Eq, Debug, Clone, Serialize, Deserialize, Hash)]
 pub enum RangeLookupMiss {
-    Single(Vec<(Bound<DataType>, Bound<DataType>)>),
-    Double(Vec<(Bound<(DataType, DataType)>, Bound<(DataType, DataType)>)>),
-    Many(Vec<(Bound<Vec<DataType>>, Bound<Vec<DataType>>)>),
+    Point(Vec<DataType>),
+    Single(Bound<DataType>, Bound<DataType>),
+    Double(Bound<(DataType, DataType)>, Bound<(DataType, DataType)>),
+    Many(Bound<Vec<DataType>>, Bound<Vec<DataType>>),
+}
+
+impl RangeLookupMiss {
+    pub fn is_point(&self) -> bool {
+        match self {
+            RangeLookupMiss::Point(_) => true,
+            _ => false,
+        }
+    }
 }
 
 /// Handle to get the state of a single shard of a reader.
 #[derive(Clone)]
 pub struct SingleReadHandle {
     handle: multir::Handle,
-    trigger: Option<Arc<dyn Fn(&[DataType]) -> bool + Send + Sync>>,
+    trigger: Option<Arc<dyn Fn(&RangeLookupMiss) -> bool + Send + Sync>>,
     key: Vec<usize>,
     operators: Vec<nom_sql::Operator>,
 }
 
 impl SingleReadHandle {
     /// Trigger a replay of a missing key from a partially materialized view.
-    pub fn trigger(&self, key: &[DataType]) -> bool {
+    pub fn trigger(&self, key: &RangeLookupMiss) -> bool {
         assert!(
             self.trigger.is_some(),
             "tried to trigger a replay for a fully materialized view"
@@ -365,7 +396,7 @@ impl SingleReadHandle {
             })
     }
 
-    pub fn try_find_range_and<F, T, R>(&self, range: R, then: F) -> Result<(Option<Vec<T>>, i64), Option<RangeLookupMiss>>
+    pub fn try_find_range_and<F, T, R>(&self, range: R, then: F) -> Result<(Option<Vec<T>>, i64), Option<Vec<RangeLookupMiss>>>
     where
         F: Fn(&[Vec<DataType>]) -> T,
         R: RangeBounds<Vec<DataType>>,

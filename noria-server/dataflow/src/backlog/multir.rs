@@ -4,12 +4,13 @@ use evmap;
 use unbounded_interval_tree::IntervalTree;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::ops::RangeBounds;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 pub(super) enum Handle {
-    Single(evmap::ReadHandle<DataType, Vec<DataType>, i64>, IntervalTree<DataType>),
-    Double(evmap::ReadHandle<(DataType, DataType), Vec<DataType>, i64>, IntervalTree<(DataType, DataType)>),
-    Many(evmap::ReadHandle<Vec<DataType>, Vec<DataType>, i64>, IntervalTree<Vec<DataType>>),
+    Single(evmap::ReadHandle<DataType, Vec<DataType>, i64>, Arc<Mutex<IntervalTree<DataType>>>),
+    Double(evmap::ReadHandle<(DataType, DataType), Vec<DataType>, i64>, Arc<Mutex<IntervalTree<(DataType, DataType)>>>),
+    Many(evmap::ReadHandle<Vec<DataType>, Vec<DataType>, i64>, Arc<Mutex<IntervalTree<Vec<DataType>>>>),
 }
 
 impl Handle {
@@ -62,7 +63,7 @@ impl Handle {
         }
     }
 
-    pub(super) fn meta_get_range_and<F, T, R>(&self, range: R, then: F) -> Result<(Option<Vec<T>>, i64), Option<RangeLookupMiss>>
+    pub(super) fn meta_get_range_and<F, T, R>(&self, range: R, then: F) -> Result<(Option<Vec<T>>, i64), Option<Vec<RangeLookupMiss>>>
     where
         F: Fn(&[Vec<DataType>]) -> T,
         R: RangeBounds<Vec<DataType>>,
@@ -86,7 +87,11 @@ impl Handle {
                 };
 
                 let range = (start, end);
-                let diff = t.get_interval_difference(range.clone());
+                let diff : Vec<_> = t.lock().unwrap()
+                    .get_interval_difference(range.clone())
+                    .into_iter()
+                    .map(|(start_miss, end_miss)| RangeLookupMiss::Single(start_miss, end_miss))
+                    .collect();
                 println!("diff: {:?}", diff);
                 if diff.is_empty() {
                     match h.meta_get_range_and(range, then) {
@@ -94,7 +99,7 @@ impl Handle {
                         None => Err(None),
                     }
                 } else {
-                    Err(Some(RangeLookupMiss::Single(diff)))
+                    Err(Some(diff))
                 }
             },
             Handle::Double(ref h, ref t) => {
@@ -115,7 +120,11 @@ impl Handle {
                 };
 
                 let range = (start, end);
-                let diff = t.get_interval_difference(range.clone());
+                let diff : Vec<_> = t.lock().unwrap()
+                    .get_interval_difference(range.clone())
+                    .into_iter()
+                    .map(|(start_miss, end_miss)| RangeLookupMiss::Double(start_miss, end_miss))
+                    .collect();
                 println!("diff: {:?}", diff);
                 if diff.is_empty() {
                     match h.meta_get_range_and(range, then) {
@@ -123,7 +132,7 @@ impl Handle {
                         None => Err(None),
                     }
                 } else {
-                    Err(Some(RangeLookupMiss::Double(diff)))
+                    Err(Some(diff))
                 }
             },
             Handle::Many(ref h, ref t) => {
@@ -132,7 +141,11 @@ impl Handle {
                 assert!(range.end_bound() != Unbounded);
 
                 let range = (range.start_bound().cloned(), range.end_bound().cloned());
-                let diff = t.get_interval_difference(range.clone());
+                let diff : Vec<_> = t.lock().unwrap()
+                    .get_interval_difference(range.clone())
+                    .into_iter()
+                    .map(|(start_miss, end_miss)| RangeLookupMiss::Many(start_miss, end_miss))
+                    .collect();
                 println!("diff: {:?}", diff);
                 if diff.is_empty() {
                     match h.meta_get_range_and(range, then) {
@@ -140,7 +153,7 @@ impl Handle {
                         None => Err(None),
                     }
                 } else {
-                    Err(Some(RangeLookupMiss::Many(diff)))
+                    Err(Some(diff))
                 }
             },
         }

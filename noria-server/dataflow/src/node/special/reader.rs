@@ -1,4 +1,5 @@
 use backlog;
+use backlog::RangeLookupMiss;
 use noria::channel;
 use prelude::*;
 
@@ -147,10 +148,11 @@ impl Reader {
     }
 
     pub(in crate::node) fn on_eviction(&mut self, _key_columns: &[usize], keys: &[Vec<DataType>]) {
+        use std::borrow::Cow;
         // NOTE: *could* be None if reader has been created but its state hasn't been built yet
         if let Some(w) = self.writer.as_mut() {
             for k in keys {
-                w.mut_with_key(&k[..]).mark_hole();
+                w.mut_with_key(Cow::Borrowed(&RangeLookupMiss::Point(*k))).mark_hole();
             }
             w.swap();
         }

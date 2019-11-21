@@ -1,3 +1,4 @@
+use backlog::RangeLookupMiss;
 use petgraph;
 use serde::{Deserialize, Serialize};
 
@@ -64,7 +65,7 @@ pub enum InitialState {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ReplayPieceContext {
     Partial {
-        for_keys: HashSet<Vec<DataType>>,
+        for_keys: HashSet<Vec<DataType>>, // TODO(jonathangb): multiple non-overlapping ranges
         unishard: bool,
         ignore: bool,
     },
@@ -196,7 +197,7 @@ pub enum Packet {
     /// Ask domain (nicely) to replay a particular key.
     RequestPartialReplay {
         tag: Tag,
-        key: Vec<DataType>,
+        key: RangeLookupMiss,
         unishard: bool,
     },
 
@@ -204,7 +205,7 @@ pub enum Packet {
     RequestReaderReplay {
         node: LocalNodeIndex,
         cols: Vec<usize>,
-        key: Vec<DataType>,
+        key: RangeLookupMiss,
     },
 
     /// Instruct domain to replay the state of a particular node along an existing replay path.
