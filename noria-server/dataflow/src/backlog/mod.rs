@@ -1,5 +1,5 @@
+use crate::prelude::*;
 use common::SizeOf;
-use prelude::*;
 use rand::prelude::*;
 use std::borrow::Cow;
 use std::ops::Bound;
@@ -7,14 +7,18 @@ use std::sync::Arc;
 use std::ops::RangeBounds;
 
 /// Allocate a new end-user facing result table.
-crate fn new(cols: usize, key: &[usize]) -> (SingleReadHandle, WriteHandle) {
+pub(crate) fn new(cols: usize, key: &[usize]) -> (SingleReadHandle, WriteHandle) {
     new_inner(cols, key, None)
 }
 
 /// Allocate a new partially materialized end-user facing result table.
 ///
 /// Misses in this table will call `trigger` to populate the entry, and retry until successful.
-crate fn new_partial<F>(cols: usize, key: &[usize], trigger: F) -> (SingleReadHandle, WriteHandle)
+pub(crate) fn new_partial<F>(
+    cols: usize,
+    key: &[usize],
+    trigger: F,
+) -> (SingleReadHandle, WriteHandle)
 where
     F: Fn(&[DataType]) -> bool + 'static + Send + Sync,
 {
@@ -44,24 +48,24 @@ fn new_inner(
     macro_rules! make {
         ($variant:tt) => {{
             use evmap;
-            use unbounded_interval_tree::IntervalTree;
-            let (r, w) = evmap::Options::default()
-                .with_meta(-1)
-                .construct();
-            let mut tree = IntervalTree::default();
-            // If there is no trigger, then we are fully-materialized.
-            // We can insert a single node to the interval tree that covers
-            // all possible intervals, which means that all intervals
-            // are covered by the materialized node.
-            if trigger.is_none() {
-                use std::ops::Bound::Unbounded;
-                tree.insert((Unbounded, Unbounded));
+
+            let mut evmap_options = evmap::Options::default().with_meta(-1);
+            // By default, the evmap ignores the interval tree (which is only
+            // relevant for range-queries in a partially-materialized scenario).
+            // Hence, if we detect a trigger, which implies that we have a
+            // partially-materialized reader, we must set the constructor of the
+            // evmap to not ignore the underlying interval tree. 
+            if trigger.is_some() {
+                evmap_options.set_ignore_interval_tree(false);
             }
-            println!("Iterations:");
-            for interval in tree.iter() {
-                println!("{:?}", interval);
-            }
-            (multir::Handle::$variant(r, tree), multiw::Handle::$variant(w))
+            let (r, w) = evmap_options.construct();
+
+            // if trigger.is_none() {
+            //     use std::ops::Bound::Unbounded;
+            //     tree.insert((Unbounded, Unbounded));
+            // }
+
+            (multir::Handle::$variant(r), multiw::Handle::$variant(w))
         }};
     }
 
@@ -116,7 +120,7 @@ fn key_to_double(k: Key) -> Cow<(DataType, DataType)> {
     }
 }
 
-crate struct WriteHandle {
+pub(crate) struct WriteHandle {
     handle: multiw::Handle,
     partial: bool,
     cols: usize,
@@ -126,17 +130,17 @@ crate struct WriteHandle {
 }
 
 type Key<'a> = Cow<'a, [DataType]>;
-crate struct MutWriteHandleEntry<'a> {
+pub(crate) struct MutWriteHandleEntry<'a> {
     handle: &'a mut WriteHandle,
     key: Key<'a>,
 }
-crate struct WriteHandleEntry<'a> {
+pub(crate) struct WriteHandleEntry<'a> {
     handle: &'a WriteHandle,
     key: Key<'a>,
 }
 
 impl<'a> MutWriteHandleEntry<'a> {
-    crate fn mark_filled(self) {
+    pub(crate) fn mark_filled(self) {
         if let Some((None, _)) = self
             .handle
             .handle
@@ -148,7 +152,7 @@ impl<'a> MutWriteHandleEntry<'a> {
         }
     }
 
-    crate fn mark_hole(self) {
+    pub(crate) fn mark_hole(self) {
         let size = self
             .handle
             .handle
@@ -163,7 +167,7 @@ impl<'a> MutWriteHandleEntry<'a> {
 }
 
 impl<'a> WriteHandleEntry<'a> {
-    crate fn try_find_and<F, T>(self, mut then: F) -> Result<(Option<T>, i64), ()>
+    pub(crate) fn try_find_and<F, T>(self, mut then: F) -> Result<(Option<T>, i64), ()>
     where
         F: FnMut(&[Vec<DataType>]) -> T,
     {
@@ -203,7 +207,7 @@ where
 }
 
 impl WriteHandle {
-    crate fn mut_with_key<'a, K>(&'a mut self, key: K) -> MutWriteHandleEntry<'a>
+    pub(crate) fn mut_with_key<'a, K>(&'a mut self, key: K) -> MutWriteHandleEntry<'a>
     where
         K: Into<Key<'a>>,
     {
@@ -213,7 +217,7 @@ impl WriteHandle {
         }
     }
 
-    crate fn with_key<'a, K>(&'a self, key: K) -> WriteHandleEntry<'a>
+    pub(crate) fn with_key<'a, K>(&'a self, key: K) -> WriteHandleEntry<'a>
     where
         K: Into<Key<'a>>,
     {
@@ -232,7 +236,7 @@ impl WriteHandle {
         self.mut_with_key(key)
     }
 
-    crate fn entry_from_record<'a, R>(&'a self, record: R) -> WriteHandleEntry<'a>
+    pub(crate) fn entry_from_record<'a, R>(&'a self, record: R) -> WriteHandleEntry<'a>
     where
         R: Into<Cow<'a, [DataType]>>,
     {
@@ -240,14 +244,14 @@ impl WriteHandle {
         self.with_key(key)
     }
 
-    crate fn swap(&mut self) {
+    pub(crate) fn swap(&mut self) {
         self.handle.refresh();
     }
 
     /// Add a new set of records to the backlog.
     ///
     /// These will be made visible to readers after the next call to `swap()`.
-    crate fn add<I>(&mut self, rs: I)
+    pub(crate) fn add<I>(&mut self, rs: I)
     where
         I: IntoIterator<Item = Record>,
     {
@@ -262,13 +266,13 @@ impl WriteHandle {
         }
     }
 
-    crate fn is_partial(&self) -> bool {
+    pub(crate) fn is_partial(&self) -> bool {
         self.partial
     }
 
     /// Evict `count` randomly selected keys from state and return them along with the number of
     /// bytes that will be freed once the underlying `evmap` applies the operation.
-    crate fn evict_random_key(&mut self, rng: &mut ThreadRng) -> u64 {
+    pub(crate) fn evict_random_key(&mut self, rng: &mut ThreadRng) -> u64 {
         let mut bytes_to_be_freed = 0;
         if self.mem_size > 0 {
             if self.handle.is_empty() {
@@ -304,13 +308,31 @@ impl SizeOf for WriteHandle {
     }
 }
 
-/// Signify which intervals are missing in the materialized.
-#[derive(PartialEq, Debug)]
-pub enum RangeLookupMiss {
-    Single(Vec<(Bound<DataType>, Bound<DataType>)>),
-    Double(Vec<(Bound<(DataType, DataType)>, Bound<(DataType, DataType)>)>),
-    Many(Vec<(Bound<Vec<DataType>>, Bound<Vec<DataType>>)>),
+/// Contains the result of an equality or range lookup to the reader node.
+//#[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Hash)]
+#[derive(Debug)]
+pub enum ReaderLookup<T> {
+    Err,
+    MissPoint(Vec<DataType>),
+    MissRangeSingle(Vec<(Bound<DataType>, Bound<DataType>)>),
+    MissRangeDouble(Vec<(Bound<(DataType, DataType)>, Bound<(DataType, DataType)>)>),
+    MissRangeMany(Vec<(Bound<Vec<DataType>>, Bound<Vec<DataType>>)>),
+    Ok(Vec<T>, i64),
 }
+
+impl<T> ReaderLookup<T> {
+    pub fn is_miss(&self) -> bool {
+        match self {
+            Self::MissPoint(_) |
+            Self::MissRangeSingle(_) |
+            Self::MissRangeDouble(_) |
+            Self::MissRangeMany(_) => true,
+            _ => false,
+        }
+    }
+}
+
+
 
 /// Handle to get the state of a single shard of a reader.
 #[derive(Clone)]
@@ -350,34 +372,19 @@ impl SingleReadHandle {
     /// swapped in by the writer.
     ///
     /// Holes in partially materialized state are returned as `Ok((None, _))`.
-    pub fn try_find_and<F, T>(&self, key: &[DataType], mut then: F) -> Result<(Option<T>, i64), ()>
+    pub fn try_find_and<F, T>(&self, key: Vec<DataType>, mut then: F) -> ReaderLookup<T>
     where
         F: FnMut(&[Vec<DataType>]) -> T,
     {
-        self.handle
-            .meta_get_and(key, &mut then)
-            .ok_or(())
-            .map(|(mut records, meta)| {
-                if records.is_none() && self.trigger.is_none() {
-                    records = Some(then(&[]));
-                }
-                (records, meta)
-            })
+        self.handle.meta_get_and(key, &mut then)
     }
 
-    pub fn try_find_range_and<F, T, R>(&self, range: R, then: F) -> Result<(Option<Vec<T>>, i64), Option<RangeLookupMiss>>
+    pub fn try_find_range_and<F, T, R>(&self, range: R, then: F) -> ReaderLookup<T>
     where
         F: Fn(&[Vec<DataType>]) -> T,
         R: RangeBounds<Vec<DataType>>,
         {
-            self.handle
-                .meta_get_range_and(range, &then)
-                .map(|(mut records, meta)| {
-                    if records.is_none() && self.trigger.is_none() {
-                        records = Some(vec![then(&[])]);
-                    }
-                    (records, meta)
-                })
+            self.handle.meta_get_range_and(range, &then)
         }
 
     pub fn len(&self) -> usize {

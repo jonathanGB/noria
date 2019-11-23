@@ -1,36 +1,40 @@
-use backlog::RangeLookupMiss;
+use crate::backlog::ReaderLookup;
 use common::DataType;
 use evmap;
-use unbounded_interval_tree::IntervalTree;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::ops::RangeBounds;
 
 #[derive(Clone)]
 pub(super) enum Handle {
-    Single(evmap::ReadHandle<DataType, Vec<DataType>, i64>, IntervalTree<DataType>),
-    Double(evmap::ReadHandle<(DataType, DataType), Vec<DataType>, i64>, IntervalTree<(DataType, DataType)>),
-    Many(evmap::ReadHandle<Vec<DataType>, Vec<DataType>, i64>, IntervalTree<Vec<DataType>>),
+    Single(evmap::ReadHandle<DataType, Vec<DataType>, i64>),
+    Double(evmap::ReadHandle<(DataType, DataType), Vec<DataType>, i64>),
+    Many(evmap::ReadHandle<Vec<DataType>, Vec<DataType>, i64>),
 }
 
 impl Handle {
     pub(super) fn len(&self) -> usize {
         match *self {
-            Handle::Single(ref h, _) => h.len(),
-            Handle::Double(ref h, _) => h.len(),
-            Handle::Many(ref h, _) => h.len(),
+            Handle::Single(ref h) => h.len(),
+            Handle::Double(ref h) => h.len(),
+            Handle::Many(ref h) => h.len(),
         }
     }
 
-    pub(super) fn meta_get_and<F, T>(&self, key: &[DataType], then: F) -> Option<(Option<T>, i64)>
+    pub(super) fn meta_get_and<F, T>(&self, key: Vec<DataType>, then: F) -> ReaderLookup<T>
     where
         F: FnOnce(&[Vec<DataType>]) -> T,
     {
         match *self {
-            Handle::Single(ref h, _) => {
+            Handle::Single(ref h) => {
                 assert_eq!(key.len(), 1);
-                h.meta_get_and(&key[0], then)
+                match h.meta_get_and(&key[0], then) {
+                    None => ReaderLookup::Err,
+                    Some((None, _)) => ReaderLookup::MissPoint(key),
+                    Some((Some(res), metadata)) => ReaderLookup::Ok(vec![res], metadata),
+                }
+                
             }
-            Handle::Double(ref h, _) => {
+            Handle::Double(ref h) => {
                 assert_eq!(key.len(), 2);
                 // we want to transmute &[T; 2] to &(T, T), but that's not actually safe
                 // we're not guaranteed that they have the same memory layout
@@ -54,22 +58,30 @@ impl Handle {
                         1,
                     );
                     let stack_key = mem::transmute::<_, &(DataType, DataType)>(&stack_key);
-                    let v = h.meta_get_and(&stack_key, then);
-                    v
+                    match h.meta_get_and(&stack_key, then) {
+                        None => ReaderLookup::Err,
+                        Some((None, _)) => ReaderLookup::MissPoint(key),
+                        Some((Some(res), metadata)) => ReaderLookup::Ok(vec![res], metadata),
+                    }
                 }
             }
-            Handle::Many(ref h, _) => h.meta_get_and(key, then),
+            Handle::Many(ref h) => {
+                match h.meta_get_and(&key, then) {
+                    None => ReaderLookup::Err,
+                    Some((None, _)) => ReaderLookup::MissPoint(key),
+                    Some((Some(res), metadata)) => ReaderLookup::Ok(vec![res], metadata),
+                }
+            }
         }
     }
 
-    pub(super) fn meta_get_range_and<F, T, R>(&self, range: R, then: F) -> Result<(Option<Vec<T>>, i64), Option<RangeLookupMiss>>
+    pub(super) fn meta_get_range_and<F, T, R>(&self, range: R, then: F) -> ReaderLookup<T>
     where
         F: Fn(&[Vec<DataType>]) -> T,
         R: RangeBounds<Vec<DataType>>,
     {
-
         match *self {
-            Handle::Single(ref h, ref t) => {
+            Handle::Single(ref h) => {
                 println!("Single!");
                 let start = range.start_bound();
                 let end = range.end_bound();
@@ -86,18 +98,14 @@ impl Handle {
                 };
 
                 let range = (start, end);
-                let diff = t.get_interval_difference(range.clone());
-                println!("diff: {:?}", diff);
-                if diff.is_empty() {
-                    match h.meta_get_range_and(range, then) {
-                        Some(res) => Ok(res),
-                        None => Err(None),
-                    }
-                } else {
-                    Err(Some(RangeLookupMiss::Single(diff)))
+
+                match h.meta_get_range_and(range, then) {
+                    evmap::RangeLookup::Err => ReaderLookup::Err,
+                    evmap::RangeLookup::Ok(res, metadata) => ReaderLookup::Ok(res, metadata),
+                    evmap::RangeLookup::Miss(miss) => ReaderLookup::MissRangeSingle(miss),
                 }
-            },
-            Handle::Double(ref h, ref t) => {
+            }
+            Handle::Double(ref h) => {
                 println!("Double!");
                 let start = range.start_bound();
                 let end = range.end_bound();
@@ -115,34 +123,23 @@ impl Handle {
                 };
 
                 let range = (start, end);
-                let diff = t.get_interval_difference(range.clone());
-                println!("diff: {:?}", diff);
-                if diff.is_empty() {
-                    match h.meta_get_range_and(range, then) {
-                        Some(res) => Ok(res),
-                        None => Err(None),
-                    }
-                } else {
-                    Err(Some(RangeLookupMiss::Double(diff)))
+                match h.meta_get_range_and(range, then) {
+                    evmap::RangeLookup::Err => ReaderLookup::Err,
+                    evmap::RangeLookup::Ok(res, metadata) => ReaderLookup::Ok(res, metadata),
+                    evmap::RangeLookup::Miss(miss) => ReaderLookup::MissRangeDouble(miss),
                 }
-            },
-            Handle::Many(ref h, ref t) => {
+            }
+            Handle::Many(ref h) => {
                 println!("Many!");
                 assert!(range.start_bound() != Unbounded);
                 assert!(range.end_bound() != Unbounded);
-
-                let range = (range.start_bound().cloned(), range.end_bound().cloned());
-                let diff = t.get_interval_difference(range.clone());
-                println!("diff: {:?}", diff);
-                if diff.is_empty() {
-                    match h.meta_get_range_and(range, then) {
-                        Some(res) => Ok(res),
-                        None => Err(None),
-                    }
-                } else {
-                    Err(Some(RangeLookupMiss::Many(diff)))
+ 
+                match h.meta_get_range_and(range, then) {
+                    evmap::RangeLookup::Err => ReaderLookup::Err,
+                    evmap::RangeLookup::Ok(res, metadata) => ReaderLookup::Ok(res, metadata),
+                    evmap::RangeLookup::Miss(miss) => ReaderLookup::MissRangeMany(miss),
                 }
-            },
+            }
         }
     }
 }
