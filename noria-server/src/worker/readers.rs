@@ -287,24 +287,24 @@ fn handle_message(
                         }
                         ReaderLookup::MissPoint(p) => {
                             // Miss a point (during non-range query).
-                            missing_ranges.push(KeyRange::Point(p));
+                            missing_ranges.push((true, i, KeyRange::Point(p)));
                         }
                         ReaderLookup::MissRangeSingle(misses) => {
                             // Miss one or many "single" ranges.
                             for (start, end) in misses {
-                                missing_ranges.push(KeyRange::RangeSingle(start, end));
+                                missing_ranges.push((true, i, KeyRange::RangeSingle(start, end)));
                             }
                         }
                         ReaderLookup::MissRangeDouble(misses) => {
                             // Miss one or many "double" ranges.
                             for (start, end) in misses {
-                                missing_ranges.push(KeyRange::RangeDouble(start, end));
+                                missing_ranges.push((true, i, KeyRange::RangeDouble(start, end)));
                             }
                         }
                         ReaderLookup::MissRangeMany(misses) => {
                             // Miss one or many "many" ranges.
                             for (start, end) in misses {
-                                missing_ranges.push(KeyRange::RangeMany(start, end));
+                                missing_ranges.push((true, i, KeyRange::RangeMany(start, end)));
                             }
                         }
                     }
@@ -325,9 +325,8 @@ fn handle_message(
                     });
                 }
 
-                // TODO(jonathangb): trigger range replays.
                 // trigger backfills for all the keys we missed on for later
-                for missing_range in &missing_ranges {
+                for (_, _, missing_range) in &missing_ranges {
                     reader.trigger(missing_range);
                 }
 
@@ -391,7 +390,7 @@ struct BlockingRead {
 
     trigger_timeout: time::Duration,
     next_trigger: time::Instant,
-    missing_ranges: Vec<KeyRange>,
+    missing_ranges: Vec<(bool, usize, KeyRange)>,
 }
 
 impl Future for BlockingRead {
@@ -414,6 +413,36 @@ impl Future for BlockingRead {
                 let mut triggered = false;
                 let mut missing = false;
                 let now = time::Instant::now();
+                for (still_missing, i, missed_range) in this.missing_ranges.iter_mut() {
+                    if !*still_missing {
+                        continue;
+                    }
+
+                    assert!(missed_range.is_point()); // TODO(jonathangb): handle non-point ranges
+                    let key = missed_range.get_ref_key_point().clone();
+                    match reader.try_find_and(key, dup) {
+                        ReaderLookup::Err => {
+                            // map has been deleted, so server is shutting down
+                            return Err(());
+                        }
+                        ReaderLookup::Ok(rs, _) => {
+                            this.read[*i] = rs.into_iter().flatten().collect();
+                            *still_missing = false;
+                        }
+                        ReaderLookup::MissPoint(miss) => {
+                            if now > *this.next_trigger {
+                                if !reader.trigger(&KeyRange::Point(miss)) {
+                                    return Err(());
+                                }
+
+                                triggered = true;
+                            }
+
+                            missing = true;
+                        }
+                        _ => unimplemented!(),
+                    }
+                }
                 /*for (i, key) in this.keys.iter_mut().enumerate() {
                     if key.is_empty() {
                         // already have this value
