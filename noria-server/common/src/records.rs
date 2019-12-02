@@ -105,6 +105,7 @@ impl<'a> IntoIterator for &'a Records {
 }
 
 #[derive(Clone, Default, PartialEq, Debug, Serialize, Deserialize)]
+// TODO(jonathangb): embed an Option<KeyRange>?
 pub struct Records(Vec<Record>);
 
 impl Deref for Records {

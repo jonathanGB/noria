@@ -1,5 +1,6 @@
 use crate::payload;
 use crate::prelude::*;
+use crate::KeyRange;
 use vec_map::VecMap;
 
 #[derive(Serialize, Deserialize)]
@@ -131,17 +132,19 @@ impl Sharder {
         &mut self,
         key_columns: &[usize],
         tag: Tag,
-        keys: &[Vec<DataType>],
+        keys: &[KeyRange],
         src: LocalNodeIndex,
         is_sharded: bool,
         output: &mut dyn Executor,
     ) {
         assert!(!is_sharded);
 
-        if key_columns.len() == 1 && key_columns[0] == self.shard_by {
+        if keys.len() > 1 && keys[0].is_point() && key_columns.len() == 1 && key_columns[0] == self.shard_by {
             // Send only to the shards that must evict something.
             for key in keys {
-                let shard = self.shard(&key[0]);
+                assert!(key.is_point());
+                let key_point = key.get_ref_key_point();
+                let shard = self.shard(&key_point[0]);
                 let dst = self.txs[shard].0;
                 let p = self.sharded.entry(shard).or_insert_with(|| {
                     Box::new(Packet::EvictKeys {
@@ -151,7 +154,7 @@ impl Sharder {
                     })
                 });
                 match **p {
-                    Packet::EvictKeys { ref mut keys, .. } => keys.push(key.to_vec()),
+                    Packet::EvictKeys { ref mut keys, .. } => keys.push(key.clone()),
                     _ => unreachable!(),
                 }
             }

@@ -29,6 +29,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time;
 
+pub use backlog::KeyRange;
 pub use backlog::ReaderLookup;
 pub use backlog::SingleReadHandle;
 pub type Readers =

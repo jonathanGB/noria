@@ -5,6 +5,7 @@ use rand::{self, Rng};
 
 use crate::prelude::*;
 use crate::state::single_state::SingleState;
+use crate::KeyRange;
 use common::SizeOf;
 
 #[derive(Default)]
@@ -114,13 +115,13 @@ impl State for MemoryState {
         self.state.iter().map(SingleState::rows).sum()
     }
 
-    fn mark_filled(&mut self, key: Vec<DataType>, tag: Tag) {
+    fn mark_filled(&mut self, key: KeyRange, tag: Tag) {
         debug_assert!(!self.state.is_empty(), "filling uninitialized index");
         let index = self.by_tag[&tag];
         self.state[index].mark_filled(key);
     }
 
-    fn mark_hole(&mut self, key: &[DataType], tag: Tag) {
+    fn mark_hole(&mut self, key: &KeyRange, tag: Tag) {
         debug_assert!(!self.state.is_empty(), "filling uninitialized index");
         let index = self.by_tag[&tag];
         let freed_bytes = self.state[index].mark_hole(key);
@@ -149,7 +150,7 @@ impl State for MemoryState {
         self.state[0].values().flat_map(fix).collect()
     }
 
-    fn evict_random_keys(&mut self, count: usize) -> (&[usize], Vec<Vec<DataType>>, u64) {
+    fn evict_random_keys(&mut self, count: usize) -> (&[usize], Vec<KeyRange>, u64) {
         let mut rng = rand::thread_rng();
         let index = rng.gen_range(0, self.state.len());
         let (bytes_freed, keys) = self.state[index].evict_random_keys(count, &mut rng);
@@ -157,7 +158,7 @@ impl State for MemoryState {
         (self.state[index].key(), keys, bytes_freed)
     }
 
-    fn evict_keys(&mut self, tag: Tag, keys: &[Vec<DataType>]) -> Option<(&[usize], u64)> {
+    fn evict_keys(&mut self, tag: Tag, keys: &[KeyRange]) -> Option<(&[usize], u64)> {
         // we may be told to evict from a tag that add_key hasn't been called for yet
         // this can happen if an upstream domain issues an eviction for a replay path that we have
         // been told about, but that has not yet been finalized.

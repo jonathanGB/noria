@@ -1,6 +1,8 @@
 use crate::backlog;
+use backlog::{KeyRange, ReaderLookup};
 use crate::prelude::*;
 use noria::channel;
+use std::borrow::Cow;
 
 /// A StreamUpdate reflects the addition or deletion of a row from a reader node.
 #[derive(Clone, Debug, PartialEq)]
@@ -146,11 +148,11 @@ impl Reader {
         bytes_freed
     }
 
-    pub(in crate::node) fn on_eviction(&mut self, _key_columns: &[usize], keys: &[Vec<DataType>]) {
+    pub(in crate::node) fn on_eviction(&mut self, _key_columns: &[usize], keys: &[KeyRange]) {
         // NOTE: *could* be None if reader has been created but its state hasn't been built yet
         if let Some(w) = self.writer.as_mut() {
             for k in keys {
-                w.mut_with_key(&k[..]).mark_hole();
+                w.mut_with_key(Cow::Borrowed(k)).mark_hole();
             }
             w.swap();
         }
@@ -165,17 +167,18 @@ impl Reader {
                 m.map_data(|data| {
                     data.retain(|row| {
                         match state.entry_from_record(&row[..]).try_find_and(|_| ()) {
-                            Ok((None, _)) => {
+                            ReaderLookup::MissPoint(_) => {
                                 // row would miss in partial state.
                                 // leave it blank so later lookup triggers replay.
                                 false
                             }
-                            Err(_) => unreachable!(),
-                            _ => {
+                            ReaderLookup::Err => unreachable!(),
+                            ReaderLookup::Ok(..) => {
                                 // state is already present,
                                 // so we can safely keep it up to date.
                                 true
                             }
+                            _ => unreachable!(),
                         }
                     });
                 });
@@ -188,26 +191,29 @@ impl Reader {
                 m.map_data(|data| {
                     data.retain(|row| {
                         match state.entry_from_record(&row[..]).try_find_and(|_| ()) {
-                            Ok((None, _)) => {
+                            ReaderLookup::MissPoint(_) => {
                                 // filling a hole with replay -- ok
                                 true
                             }
-                            Ok((Some(_), _)) => {
+                            ReaderLookup::Ok(..) => {
                                 // a given key should only be replayed to once!
                                 false
                             }
-                            Err(_) => {
+                            ReaderLookup::Err => {
                                 // state has not yet been swapped, which means it's new,
                                 // which means there are no readers, which means no
                                 // requests for replays have been issued by readers, which
                                 // means no duplicates can be received.
                                 true
                             }
+                            _ => unreachable!("try_find_and does not return a miss range"),
                         }
                     });
                 });
             }
 
+            // TODO(jonathangb): We should call a new `add_range` when we have a range.
+            // I don't think we have the required info
             if self.streamers.is_empty() {
                 state.add(m.take_data());
             } else {

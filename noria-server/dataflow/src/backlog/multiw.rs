@@ -1,7 +1,8 @@
-use super::{key_to_double, key_to_single, Key};
+use super::{key_to_double, key_to_single, Key, ReaderLookup, KeyRange};
 use crate::prelude::*;
 use evmap;
-use fnv::FnvBuildHasher;
+use std::ops::Bound::Unbounded;
+use std::borrow::Cow;
 
 pub(super) enum Handle {
     Single(evmap::WriteHandle<DataType, Vec<DataType>, i64>),
@@ -19,6 +20,8 @@ impl Handle {
     }
 
     pub fn clear(&mut self, k: Key) {
+        assert!(k.is_point());
+
         match *self {
             Handle::Single(ref mut h) => {
                 h.clear(key_to_single(k).into_owned());
@@ -27,12 +30,18 @@ impl Handle {
                 h.clear(key_to_double(k).into_owned());
             }
             Handle::Many(ref mut h) => {
+                let k = match k {
+                    Cow::Owned(k) => Cow::Owned(k.get_key_point()),
+                    Cow::Borrowed(k) => Cow::Borrowed(k.get_ref_key_point()),
+                };
                 h.clear(k.into_owned());
             }
         }
     }
 
     pub fn empty(&mut self, k: Key) {
+        assert!(k.is_point());
+
         match *self {
             Handle::Single(ref mut h) => {
                 h.empty(key_to_single(k).into_owned());
@@ -41,6 +50,10 @@ impl Handle {
                 h.empty(key_to_double(k).into_owned());
             }
             Handle::Many(ref mut h) => {
+                let k = match k {
+                    Cow::Owned(k) => Cow::Owned(k.get_key_point()),
+                    Cow::Borrowed(k) => Cow::Borrowed(k.get_ref_key_point()),
+                };
                 h.empty(k.into_owned());
             }
         }
@@ -71,17 +84,23 @@ impl Handle {
         }
     }
 
-    pub fn meta_get_and<F, T>(&self, key: Key, then: F) -> Option<(Option<T>, i64)>
+    pub fn meta_get_and<F, T>(&self, key: Key, then: F) -> ReaderLookup<T>
     where
         F: FnOnce(&[Vec<DataType>]) -> T,
     {
+        assert!(key.is_point());
+        let key_point = key.get_ref_key_point();
         match *self {
             Handle::Single(ref h) => {
-                assert_eq!(key.len(), 1);
-                h.meta_get_and(&key[0], then)
+                assert_eq!(key_point.len(), 1);
+                match h.meta_get_and(&key_point[0], then) {
+                    None => ReaderLookup::Err,
+                    Some((None, _)) => ReaderLookup::MissPoint(key_point.clone()),
+                    Some((Some(res), metadata)) => ReaderLookup::Ok(vec![res], metadata),
+                }
             }
             Handle::Double(ref h) => {
-                assert_eq!(key.len(), 2);
+                assert_eq!(key_point.len(), 2);
                 // we want to transmute &[T; 2] to &(T, T), but that's not actually safe
                 // we're not guaranteed that they have the same memory layout
                 // we *could* just clone DataType, but that would mean dealing with string refcounts
@@ -94,21 +113,85 @@ impl Handle {
                     let mut stack_key: (mem::MaybeUninit<DataType>, mem::MaybeUninit<DataType>) =
                         (mem::MaybeUninit::uninit(), mem::MaybeUninit::uninit());
                     ptr::copy_nonoverlapping(
-                        &key[0] as *const DataType,
+                        &key_point[0] as *const DataType,
                         stack_key.0.as_mut_ptr(),
                         1,
                     );
                     ptr::copy_nonoverlapping(
-                        &key[1] as *const DataType,
+                        &key_point[1] as *const DataType,
                         stack_key.1.as_mut_ptr(),
                         1,
                     );
                     let stack_key = mem::transmute::<_, &(DataType, DataType)>(&stack_key);
-                    let v = h.meta_get_and(&stack_key, then);
-                    v
+                    match h.meta_get_and(&stack_key, then) {
+                        None => ReaderLookup::Err,
+                        Some((None, _)) => ReaderLookup::MissPoint(key_point.clone()),
+                        Some((Some(res), metadata)) => ReaderLookup::Ok(vec![res], metadata),
+                    }
                 }
             }
-            Handle::Many(ref h) => h.meta_get_and(&key[..], then),
+            Handle::Many(ref h) => {
+                match h.meta_get_and(key_point, then) {
+                    None => ReaderLookup::Err,
+                    Some((None, _)) => ReaderLookup::MissPoint(key_point.clone()),
+                    Some((Some(res), metadata)) => ReaderLookup::Ok(vec![res], metadata),
+                }
+            }
+        }
+    }
+
+    pub(super) fn meta_get_range_and<F, T>(&self, key: Key, then: F) -> ReaderLookup<T>
+    where
+        F: Fn(&[Vec<DataType>]) -> T,
+    {
+        assert!(!key.is_point());
+
+        match *self {
+            Handle::Single(ref h) => {
+                println!("Single!");
+                if let KeyRange::RangeSingle(start, end) = key.into_owned() {
+                    let range = (start, end);
+
+                    match h.meta_get_range_and(range, then) {
+                        evmap::RangeLookup::Err => ReaderLookup::Err,
+                        evmap::RangeLookup::Ok(res, metadata) => ReaderLookup::Ok(res, metadata),
+                        evmap::RangeLookup::Miss(miss) => ReaderLookup::MissRangeSingle(miss),
+                    }
+                } else {
+                    unreachable!("Single handle should have a single-type range")
+                }
+            }
+            Handle::Double(ref h) => {
+                println!("Double!");
+                if let KeyRange::RangeDouble(start, end) = key.into_owned() {
+                    let range = (start, end);
+
+                    match h.meta_get_range_and(range, then) {
+                        evmap::RangeLookup::Err => ReaderLookup::Err,
+                        evmap::RangeLookup::Ok(res, metadata) => ReaderLookup::Ok(res, metadata),
+                        evmap::RangeLookup::Miss(miss) => ReaderLookup::MissRangeDouble(miss),
+                    }
+                } else {
+                    unreachable!("Double handle should have a double-type range")
+                }
+            }
+            Handle::Many(ref h) => {
+                println!("Many!");
+                if let KeyRange::RangeMany(start, end) = key.into_owned() {
+                    assert!(start != Unbounded, "Can't have unbounded in multi-equality + inequality case");
+                    assert!(end != Unbounded, "Can't have unbounded in multi-equality + inequality case");
+
+                    let range = (start, end);
+
+                    match h.meta_get_range_and(range, then) {
+                        evmap::RangeLookup::Err => ReaderLookup::Err,
+                        evmap::RangeLookup::Ok(res, metadata) => ReaderLookup::Ok(res, metadata),
+                        evmap::RangeLookup::Miss(miss) => ReaderLookup::MissRangeMany(miss),
+                    }
+                } else {
+                    unreachable!("Many handle should have a many-type range")
+                }
+            }
         }
     }
 

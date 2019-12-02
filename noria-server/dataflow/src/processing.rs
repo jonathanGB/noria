@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ops;
 use crate::prelude::*;
+use crate::KeyRange;
 
 // TODO: make a Key type that is an ArrayVec<DataType>
 
@@ -53,7 +54,7 @@ pub(crate) struct Lookup {
     /// The columns of `on` we were looking up on.
     pub(crate) cols: Vec<usize>,
     /// The key used for the lookup.
-    pub(crate) key: Vec<DataType>,
+    pub(crate) key: KeyRange,
 }
 
 #[derive(Default)]
@@ -73,7 +74,7 @@ pub(crate) enum RawProcessingResult {
     CapturedFull,
     ReplayPiece {
         rows: Records,
-        keys: HashSet<Vec<DataType>>,
+        keys: HashSet<KeyRange>,
         captured: HashSet<Vec<DataType>>,
     },
 }
@@ -83,7 +84,7 @@ pub(crate) enum ReplayContext {
     None,
     Partial {
         key_cols: Vec<usize>,
-        keys: HashSet<Vec<DataType>>,
+        keys: HashSet<KeyRange>,
         unishard: bool,
     },
     Full {
@@ -215,7 +216,7 @@ where
         &mut self,
         _from: LocalNodeIndex,
         _key_columns: &[usize],
-        _keys: &mut Vec<Vec<DataType>>,
+        _keys: &mut Vec<KeyRange>,
     ) {
     }
 

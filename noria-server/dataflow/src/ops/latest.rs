@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::prelude::*;
+use crate::KeyRange;
 
 /// Latest provides an operator that will maintain the last record for every group.
 ///
@@ -80,7 +81,7 @@ impl Ingredient for Latest {
                             lookups.push(Lookup {
                                 on: *us,
                                 cols: vec![self.key],
-                                key: vec![r[self.key].clone()],
+                                key: KeyRange::Point(vec![r[self.key].clone()]),
                             });
                         }
 

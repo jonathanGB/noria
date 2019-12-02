@@ -1,6 +1,7 @@
 use super::mk_key::MakeKey;
 use crate::prelude::*;
 use crate::state::keyed_state::KeyedState;
+use crate::KeyRange;
 use common::SizeOf;
 use rand::prelude::*;
 use std::rc::Rc;
@@ -68,6 +69,7 @@ impl SingleState {
             KeyedState::Quad(ref mut map) => insert_row_match_impl!(self, r, map),
             KeyedState::Quin(ref mut map) => insert_row_match_impl!(self, r, map),
             KeyedState::Sex(ref mut map) => insert_row_match_impl!(self, r, map),
+            _ => unimplemented!() // TODO(jonathangb): range add rows?
         }
 
         self.rows += 1;
@@ -115,76 +117,127 @@ impl SingleState {
             KeyedState::Sex(ref mut map) => {
                 remove_row_match_impl!(self, r, do_remove, map, (DataType, _, _, _, _, _))
             }
+            _ => unimplemented!(), // TODO(jonathangb): range remove rows?
         }
         None
     }
 
-    pub(super) fn mark_filled(&mut self, key: Vec<DataType>) {
-        let mut key = key.into_iter();
-        let replaced = match self.state {
-            KeyedState::Single(ref mut map) => map.insert(key.next().unwrap(), Vec::new()),
-            KeyedState::Double(ref mut map) => {
-                map.insert((key.next().unwrap(), key.next().unwrap()), Vec::new())
+    pub(super) fn mark_filled(&mut self, key: KeyRange) {
+        let replaced = if key.is_point() {
+            let mut key = key.get_key_point().into_iter();
+            match self.state {
+                KeyedState::Single(ref mut map) => map.insert(key.next().unwrap(), Vec::new()),
+                KeyedState::Double(ref mut map) => {
+                    map.insert((key.next().unwrap(), key.next().unwrap()), Vec::new())
+                }
+                KeyedState::Tri(ref mut map) => map.insert(
+                    (
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                    ),
+                    Vec::new(),
+                ),
+                KeyedState::Quad(ref mut map) => map.insert(
+                    (
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                    ),
+                    Vec::new(),
+                ),
+                KeyedState::Quin(ref mut map) => map.insert(
+                    (
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                    ),
+                    Vec::new(),
+                ),
+                KeyedState::Sex(ref mut map) => map.insert(
+                    (
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                        key.next().unwrap(),
+                    ),
+                    Vec::new(),
+                ),
+                _ => unreachable!(),
             }
-            KeyedState::Tri(ref mut map) => map.insert(
-                (
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                ),
-                Vec::new(),
-            ),
-            KeyedState::Quad(ref mut map) => map.insert(
-                (
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                ),
-                Vec::new(),
-            ),
-            KeyedState::Quin(ref mut map) => map.insert(
-                (
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                ),
-                Vec::new(),
-            ),
-            KeyedState::Sex(ref mut map) => map.insert(
-                (
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                    key.next().unwrap(),
-                ),
-                Vec::new(),
-            ),
+        } else {
+            match self.state {
+                KeyedState::RangeSingle(ref mut map) => {
+                    if let KeyRange::RangeSingle(start, end) = key {
+                        map.insert((start, end), Vec::new())
+                    } else {
+                        unreachable!()
+                    }
+                }
+                KeyedState::RangeDouble(ref mut map) => {
+                    if let KeyRange::RangeDouble(start, end) = key {
+                        map.insert((start, end), Vec::new())
+                    } else {
+                        unreachable!()
+                    }
+                }
+                KeyedState::RangeMany(ref mut map) => {
+                    if let KeyRange::RangeMany(start, end) = key {
+                        map.insert((start, end), Vec::new())
+                    } else {
+                        unreachable!()
+                    }
+                }
+                _ => unreachable!(),
+            }
         };
+
         assert!(replaced.is_none());
     }
 
-    pub(super) fn mark_hole(&mut self, key: &[DataType]) -> u64 {
+    pub(super) fn mark_hole(&mut self, key: &KeyRange) -> u64 {
         let removed = match self.state {
-            KeyedState::Single(ref mut m) => m.swap_remove(&(key[0])),
+            KeyedState::Single(ref mut m) => m.swap_remove(&(key.get_ref_key_point()[0])),
             KeyedState::Double(ref mut m) => {
-                m.swap_remove::<(DataType, _)>(&MakeKey::from_key(key))
+                m.swap_remove::<(DataType, _)>(&MakeKey::from_key(key.get_ref_key_point()))
             }
             KeyedState::Tri(ref mut m) => {
-                m.swap_remove::<(DataType, _, _)>(&MakeKey::from_key(key))
+                m.swap_remove::<(DataType, _, _)>(&MakeKey::from_key(key.get_ref_key_point()))
             }
             KeyedState::Quad(ref mut m) => {
-                m.swap_remove::<(DataType, _, _, _)>(&MakeKey::from_key(key))
+                m.swap_remove::<(DataType, _, _, _)>(&MakeKey::from_key(key.get_ref_key_point()))
             }
             KeyedState::Quin(ref mut m) => {
-                m.swap_remove::<(DataType, _, _, _, _)>(&MakeKey::from_key(key))
+                m.swap_remove::<(DataType, _, _, _, _)>(&MakeKey::from_key(key.get_ref_key_point()))
             }
             KeyedState::Sex(ref mut m) => {
-                m.swap_remove::<(DataType, _, _, _, _, _)>(&MakeKey::from_key(key))
+                m.swap_remove::<(DataType, _, _, _, _, _)>(&MakeKey::from_key(key.get_ref_key_point()))
+            }
+            KeyedState::RangeSingle(ref mut m) => {
+                if let KeyRange::RangeSingle(start, end) = key {
+                    m.swap_remove(&(start.clone(), end.clone()))
+                } else {
+                    unreachable!()
+                }
+            }
+            KeyedState::RangeDouble(ref mut m) => {
+                if let KeyRange::RangeDouble(start, end) = key {
+                    m.swap_remove(&(start.clone(), end.clone()))
+                } else {
+                    unreachable!()
+                }
+            }
+            KeyedState::RangeMany(ref mut m) => {
+                if let KeyRange::RangeMany(start, end) = key {
+                    m.swap_remove(&(start.clone(), end.clone()))
+                } else {
+                    unreachable!()
+                }
             }
         };
         // mark_hole should only be called on keys we called mark_filled on
@@ -205,6 +258,9 @@ impl SingleState {
             KeyedState::Quad(ref mut map) => map.clear(),
             KeyedState::Quin(ref mut map) => map.clear(),
             KeyedState::Sex(ref mut map) => map.clear(),
+            KeyedState::RangeSingle(ref mut map) => map.clear(),
+            KeyedState::RangeDouble(ref mut map) => map.clear(),
+            KeyedState::RangeMany(ref mut map) => map.clear(),
         };
     }
 
@@ -214,7 +270,7 @@ impl SingleState {
         &mut self,
         count: usize,
         rng: &mut ThreadRng,
-    ) -> (u64, Vec<Vec<DataType>>) {
+    ) -> (u64, Vec<KeyRange>) {
         let mut bytes_freed = 0;
         let mut keys = Vec::with_capacity(count);
         for _ in 0..count {
@@ -229,7 +285,7 @@ impl SingleState {
     }
 
     /// Evicts a specified key from this state, returning the number of bytes freed.
-    pub(super) fn evict_keys(&mut self, keys: &[Vec<DataType>]) -> u64 {
+    pub(super) fn evict_keys(&mut self, keys: &[KeyRange]) -> u64 {
         keys.iter().map(|k| self.state.evict(k)).sum()
     }
 
@@ -241,6 +297,9 @@ impl SingleState {
             KeyedState::Quad(ref map) => Box::new(map.values()),
             KeyedState::Quin(ref map) => Box::new(map.values()),
             KeyedState::Sex(ref map) => Box::new(map.values()),
+            KeyedState::RangeSingle(ref map) => Box::new(map.values()),
+            KeyedState::RangeDouble(ref map) => Box::new(map.values()),
+            KeyedState::RangeMany(ref map) => Box::new(map.values()),
         }
     }
     pub(super) fn key(&self) -> &[usize] {

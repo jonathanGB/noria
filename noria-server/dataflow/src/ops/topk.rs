@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use crate::prelude::*;
+use crate::KeyRange;
 
 use nom_sql::OrderType;
 
@@ -244,7 +245,7 @@ impl Ingredient for TopK {
                             lookups.push(Lookup {
                                 on: *us,
                                 cols: group_by.clone(),
-                                key: grp.clone(),
+                                key: KeyRange::Point(grp.clone()),
                             });
                         }
 
@@ -295,7 +296,7 @@ impl Ingredient for TopK {
         &mut self,
         _: LocalNodeIndex,
         key_columns: &[usize],
-        _: &mut Vec<Vec<DataType>>,
+        _: &mut Vec<KeyRange>,
     ) {
         assert_eq!(key_columns, &self.group_by[..]);
     }

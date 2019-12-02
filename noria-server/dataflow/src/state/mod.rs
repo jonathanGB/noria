@@ -11,6 +11,7 @@ use std::{slice, vec};
 
 use crate::prelude::*;
 use common::SizeOf;
+use crate::KeyRange;
 
 pub(crate) use self::memory_state::MemoryState;
 pub(crate) use self::persistent_state::PersistentState;
@@ -29,9 +30,9 @@ pub(crate) trait State: SizeOf + Send {
     // are removed from `records` (thus the mutable reference).
     fn process_records(&mut self, records: &mut Records, partial_tag: Option<Tag>);
 
-    fn mark_hole(&mut self, key: &[DataType], tag: Tag);
+    fn mark_hole(&mut self, key: &KeyRange, tag: Tag);
 
-    fn mark_filled(&mut self, key: Vec<DataType>, tag: Tag);
+    fn mark_filled(&mut self, key: KeyRange, tag: Tag);
 
     fn lookup<'a>(&'a self, columns: &[usize], key: &KeyType) -> LookupResult<'a>;
 
@@ -44,11 +45,11 @@ pub(crate) trait State: SizeOf + Send {
 
     /// Evict `count` randomly selected keys, returning key colunms of the index chosen to evict
     /// from along with the keys evicted and the number of bytes evicted.
-    fn evict_random_keys(&mut self, count: usize) -> (&[usize], Vec<Vec<DataType>>, u64);
+    fn evict_random_keys(&mut self, count: usize) -> (&[usize], Vec<KeyRange>, u64);
 
     /// Evict the listed keys from the materialization targeted by `tag`, returning the key columns
     /// of the index that was evicted from and the number of bytes evicted.
-    fn evict_keys(&mut self, tag: Tag, keys: &[Vec<DataType>]) -> Option<(&[usize], u64)>;
+    fn evict_keys(&mut self, tag: Tag, keys: &[KeyRange]) -> Option<(&[usize], u64)>;
 
     fn clear(&mut self);
 }

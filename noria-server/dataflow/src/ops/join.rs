@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::mem;
 
 use crate::prelude::*;
+use crate::KeyRange;
 
 /// Kind of join
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -325,7 +326,7 @@ impl Ingredient for Join {
                         lookups.push(Lookup {
                             on: *self.right,
                             cols: vec![self.on.1],
-                            key: vec![prev_join_key.clone()],
+                            key: KeyRange::Point(vec![prev_join_key.clone()]),
                         });
                     }
 
@@ -369,7 +370,7 @@ impl Ingredient for Join {
                 lookups.push(Lookup {
                     on: other,
                     cols: vec![other_key],
-                    key: vec![prev_join_key.clone()],
+                    key: KeyRange::Point(vec![prev_join_key.clone()]),
                 });
             }
 

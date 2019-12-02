@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::prelude::*;
+use crate::KeyRange;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum Emit {
@@ -40,7 +41,7 @@ pub struct Union {
     replay_key_orig: Vec<usize>,
 
     replay_key: Option<HashMap<LocalNodeIndex, Vec<usize>>>,
-    replay_pieces: HashMap<Vec<DataType>, ReplayPieces>,
+    replay_pieces: HashMap<KeyRange, ReplayPieces>,
 
     required: usize,
 
@@ -303,7 +304,7 @@ impl Ingredient for Union {
                     // XXX: the clone + collect here is really sad
                     if let Some(ref mut pieces) = self
                         .replay_pieces
-                        .get_mut(&k.iter().map(|&c| r[c].clone()).collect::<Vec<_>>())
+                        .get_mut(&KeyRange::Point(k.iter().map(|&c| r[c].clone()).collect::<Vec<_>>()))
                     {
                         if let Some(ref mut rs) = pieces.buffered.get_mut(&from) {
                             // we've received a replay piece from this ancestor already for this
@@ -518,11 +519,13 @@ impl Ingredient for Union {
                 let rs = {
                     keys.iter()
                         .filter_map(|key| {
+                            assert!(key.is_point());
+                            let key = key.get_ref_key_point();
                             let rs = rs_by_key.remove(&key[..]).unwrap_or_else(Records::default);
 
                             // store this replay piece
                             use std::collections::hash_map::Entry;
-                            match replay_pieces_tmp.entry(key.clone()) {
+                            match replay_pieces_tmp.entry(KeyRange::Point(key.clone())) {
                                 Entry::Occupied(e) => {
                                     if e.get().buffered.contains_key(&from) {
                                         // chained unions are not yet supported.
@@ -569,7 +572,7 @@ impl Ingredient for Union {
                                 // TODO XXX TODO XXX TODO XXX TODO
                                 eprintln!("!!! need to issue an eviction after replaying key");
                             }
-                            released.insert(key.clone());
+                            released.insert(KeyRange::Point(key.clone()));
                             pieces.buffered.into_iter()
                         })
                         .flat_map(|(from, rs)| {
@@ -595,7 +598,7 @@ impl Ingredient for Union {
         &mut self,
         from: LocalNodeIndex,
         key_columns: &[usize],
-        keys: &mut Vec<Vec<DataType>>,
+        keys: &mut Vec<KeyRange>,
     ) {
         if self.replay_key_orig.is_empty() {
             return;

@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::KeyRange;
 use std::collections::{HashMap, HashSet};
 
 /// A Rewrite data-flow operator.
@@ -118,7 +119,7 @@ impl Ingredient for Rewrite {
                     lookups.push(Lookup {
                         on: *self.signal,
                         cols: vec![0],
-                        key: vec![key.clone()],
+                        key: KeyRange::Point(vec![key.clone()]),
                     });
                 }
 

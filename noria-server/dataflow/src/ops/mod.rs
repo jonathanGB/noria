@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use crate::prelude::*;
+use crate::KeyRange;
 
 pub mod distinct;
 pub mod filter;
@@ -185,7 +186,7 @@ impl Ingredient for NodeOperator {
         &mut self,
         from: LocalNodeIndex,
         key_columns: &[usize],
-        keys: &mut Vec<Vec<DataType>>,
+        keys: &mut Vec<KeyRange>,
     ) {
         impl_ingredient_fn_mut!(self, on_eviction, from, key_columns, keys)
     }

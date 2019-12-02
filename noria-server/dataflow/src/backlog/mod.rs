@@ -20,7 +20,7 @@ pub(crate) fn new_partial<F>(
     trigger: F,
 ) -> (SingleReadHandle, WriteHandle)
 where
-    F: Fn(&[DataType]) -> bool + 'static + Send + Sync,
+    F: Fn(&KeyRange) -> bool + 'static + Send + Sync,
 {
     new_inner(cols, key, Some(Arc::new(trigger)))
 }
@@ -28,7 +28,7 @@ where
 fn new_inner(
     cols: usize,
     key: &[usize],
-    trigger: Option<Arc<dyn Fn(&[DataType]) -> bool + Send + Sync>>,
+    trigger: Option<Arc<dyn Fn(&KeyRange) -> bool + Send + Sync>>,
 ) -> (SingleReadHandle, WriteHandle) {
     let contiguous = {
         let mut contiguous = true;
@@ -59,11 +59,6 @@ fn new_inner(
                 evmap_options.set_ignore_interval_tree(false);
             }
             let (r, w) = evmap_options.construct();
-
-            // if trigger.is_none() {
-            //     use std::ops::Bound::Unbounded;
-            //     tree.insert((Unbounded, Unbounded));
-            // }
 
             (multir::Handle::$variant(r), multiw::Handle::$variant(w))
         }};
@@ -100,23 +95,28 @@ mod multir;
 mod multiw;
 
 fn key_to_single(k: Key) -> Cow<DataType> {
-    assert_eq!(k.len(), 1);
+    assert!(k.is_point());
+    assert_eq!(k.get_ref_key_point().len(), 1);
+
     match k {
-        Cow::Owned(mut k) => Cow::Owned(k.swap_remove(0)),
-        Cow::Borrowed(k) => Cow::Borrowed(&k[0]),
+        Cow::Owned(mut k) => Cow::Owned(k.get_mut_key_point().swap_remove(0)),
+        Cow::Borrowed(k) => Cow::Borrowed(&k.get_ref_key_point()[0]),
     }
 }
 
 fn key_to_double(k: Key) -> Cow<(DataType, DataType)> {
-    assert_eq!(k.len(), 2);
+    assert!(k.is_point());
+    assert_eq!(k.get_ref_key_point().len(), 2);
+
     match k {
         Cow::Owned(k) => {
-            let mut k = k.into_iter();
+            let mut k = k.get_key_point().into_iter();
             let k1 = k.next().unwrap();
             let k2 = k.next().unwrap();
             Cow::Owned((k1, k2))
         }
-        Cow::Borrowed(k) => Cow::Owned((k[0].clone(), k[1].clone())),
+        Cow::Borrowed(k) => Cow::Owned((k.get_ref_key_point()[0].clone(),
+                                        k.get_ref_key_point()[1].clone())),
     }
 }
 
@@ -129,7 +129,9 @@ pub(crate) struct WriteHandle {
     mem_size: usize,
 }
 
-type Key<'a> = Cow<'a, [DataType]>;
+// TODO(jonathangb): ConcreteKey necessary?
+type ConcreteKey<'a> = Cow<'a, [DataType]>;
+type Key<'a> = Cow<'a, KeyRange>;
 pub(crate) struct MutWriteHandleEntry<'a> {
     handle: &'a mut WriteHandle,
     key: Key<'a>,
@@ -141,10 +143,15 @@ pub(crate) struct WriteHandleEntry<'a> {
 
 impl<'a> MutWriteHandleEntry<'a> {
     pub(crate) fn mark_filled(self) {
-        if let Some((None, _)) = self
+        if !self.key.is_point() {
+            unimplemented!("Mark filled for ranges not implemented...")
+        }
+
+        if self
             .handle
             .handle
             .meta_get_and(Cow::Borrowed(&*self.key), |rs| rs.is_empty())
+            .is_miss()
         {
             self.handle.handle.clear(self.key)
         } else {
@@ -153,32 +160,42 @@ impl<'a> MutWriteHandleEntry<'a> {
     }
 
     pub(crate) fn mark_hole(self) {
-        let size = self
-            .handle
-            .handle
-            .meta_get_and(Cow::Borrowed(&*self.key), |rs| {
-                rs.iter().map(SizeOf::deep_size_of).sum()
-            })
-            .map(|r| r.0.unwrap_or(0))
-            .unwrap_or(0);
+        if !self.key.is_point() {
+            unimplemented!("Mark filled for ranges not implemented...")
+        }
+
+        let results = self.handle
+                            .handle
+                            .meta_get_and(Cow::Borrowed(&*self.key), |rs| {
+                                rs.iter().map(SizeOf::deep_size_of).sum::<u64>()
+                            });
+        let size = if let ReaderLookup::Ok(sizes, _) = results { 
+            assert_eq!(sizes.len(), 1);
+            sizes[0] 
+        } else { 0 };
+
         self.handle.mem_size = self.handle.mem_size.checked_sub(size as usize).unwrap();
         self.handle.handle.empty(self.key)
     }
 }
 
 impl<'a> WriteHandleEntry<'a> {
-    pub(crate) fn try_find_and<F, T>(self, mut then: F) -> Result<(Option<T>, i64), ()>
+    pub(crate) fn try_find_and<F, T>(self, mut then: F) -> ReaderLookup<T>
     where
         F: FnMut(&[Vec<DataType>]) -> T,
     {
-        self.handle
-            .handle
-            .meta_get_and(self.key, &mut then)
-            .ok_or(())
+        self.handle.handle.meta_get_and(self.key, &mut then)
     }
+
+    pub(crate) fn try_find_range_and<F, T>(self, then: F) -> ReaderLookup<T>
+    where
+        F: Fn(&[Vec<DataType>]) -> T,
+        {
+            self.handle.handle.meta_get_range_and(self.key, &then)
+        }
 }
 
-fn key_from_record<'a, R>(key: &[usize], contiguous: bool, record: R) -> Key<'a>
+fn key_from_record<'a, R>(key: &[usize], contiguous: bool, record: R) -> Key<'a> // TODO(jonathangb): concrete key return?
 where
     R: Into<Cow<'a, [DataType]>>,
 {
@@ -199,10 +216,10 @@ where
                 assert_eq!(*keep.next().unwrap(), i - 1);
                 true
             });
-            Cow::Owned(record)
+            Cow::Owned(KeyRange::Point(record))
         }
-        Cow::Borrowed(record) if contiguous => Cow::Borrowed(&record[key[0]..(key[0] + key.len())]),
-        Cow::Borrowed(record) => Cow::Owned(key.iter().map(|&i| &record[i]).cloned().collect()),
+        Cow::Borrowed(record) if contiguous => Cow::Owned(KeyRange::Point(record[key[0]..(key[0] + key.len())].to_vec())),
+        Cow::Borrowed(record) => Cow::Owned(KeyRange::Point(key.iter().map(|&i| &record[i]).cloned().collect())),
     }
 }
 
@@ -308,6 +325,106 @@ impl SizeOf for WriteHandle {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
+pub enum KeyRange {
+    Point(Vec<DataType>),
+    RangeSingle(Bound<DataType>, Bound<DataType>),
+    RangeDouble(Bound<(DataType, DataType)>, Bound<(DataType, DataType)>),
+    RangeMany(Bound<Vec<DataType>>, Bound<Vec<DataType>>),
+}
+
+impl KeyRange {
+    pub fn is_point(&self) -> bool {
+        match self {
+            Self::Point(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn to_key_type<'a>(&'a self) -> common::KeyType<'a> {
+        match self {
+            Self::Point(range) => {
+                match range.len() {
+                    1 => common::KeyType::Single(&range[0]),
+                    2 => common::KeyType::Double((range[0].clone(), range[1].clone())),
+                    3 => common::KeyType::Tri((range[0].clone(), range[1].clone(), range[2].clone())),
+                    4 => common::KeyType::Quad((range[0].clone(), range[1].clone(), range[2].clone(), range[3].clone())),
+                    5 => common::KeyType::Quin((range[0].clone(), range[1].clone(), range[2].clone(), range[3].clone(), range[4].clone())),
+                    6 => common::KeyType::Sex((range[0].clone(), range[1].clone(), range[2].clone(), range[3].clone(), range[4].clone(), range[5].clone())),
+                    _ => unreachable!(),
+                }
+            }
+            Self::RangeSingle(start, end) => common::KeyType::RangeSingle((start.clone(), end.clone())),
+            Self::RangeDouble(start, end) => common::KeyType::RangeDouble((start.clone(), end.clone())),
+            Self::RangeMany(start, end) => common::KeyType::RangeMany((start.clone(), end.clone())),
+        }
+    }
+
+    // pub fn to_key_type<'a>(&'a mut self) -> common::KeyType<'a> {
+    //     match self {
+    //         Self::Point(range) => {
+    //             match range.len() {
+    //                 1 => common::KeyType::Single(&range[0]),
+    //                 2 => common::KeyType::Double((range.swap_remove(0), range.swap_remove(1))),
+    //                 3 => common::KeyType::Tri((range.swap_remove(0), range.swap_remove(1), range.swap_remove(2))),
+    //                 4 => common::KeyType::Quad((range.swap_remove(0), range.swap_remove(1), range.swap_remove(2), range.swap_remove(3))),
+    //                 5 => common::KeyType::Quin((range.swap_remove(0), range.swap_remove(1), range.swap_remove(2), range.swap_remove(3), range.swap_remove(4))),
+    //                 6 => common::KeyType::Sex((range.swap_remove(0), range.swap_remove(1), range.swap_remove(2), range.swap_remove(3), range.swap_remove(4), range.swap_remove(5))),
+    //                 _ => unreachable!(),
+    //             }
+    //         }
+    //         Self::RangeSingle(start, end) => common::KeyType::RangeSingle((start.clone(), end.clone())),
+    //         Self::RangeDouble(start, end) => common::KeyType::RangeDouble((start.clone(), end.clone())),
+    //         Self::RangeMany(start, end) => common::KeyType::RangeMany((start.clone(), end.clone())),
+    //     }
+    // }
+
+    // pub fn len(&self) -> usize {
+    //     use std::ops::Bound::*;
+
+    //     match self {
+    //         Self::RangeSingle(..) => 1,
+    //         Self::RangeDouble(..) => 2,
+    //         Self::Point(ref bound, _) | Self::RangeMany(ref bound, _) => {
+    //             match bound {
+    //                 Unbounded => 0,
+    //                 Included(ref key) | Excluded(ref key) => key.len()
+    //             }
+    //         }
+    //     }
+    // }
+
+    pub fn get_ref_key_point(&self) -> &Vec<DataType> {
+        match self {
+            Self::Point(ref key) => key,
+            _ => unreachable!("Must be a point"),
+        }
+    }
+
+    pub fn get_mut_key_point(&mut self) -> &mut Vec<DataType> {
+        match self {
+            Self::Point(ref mut key) => key,
+            _ => unreachable!("Must be a point"),
+        }
+    }
+
+    pub fn get_key_point(self) -> Vec<DataType> {
+        match self {
+            Self::Point(key) => key,
+            _ => unreachable!("Must be a point"),
+        }
+    }
+
+    pub fn get_single_key(&self) -> Option<&DataType> {
+        match self {
+            Self::Point(ref key) => {
+                if key.len() == 1 { Some(&key[0]) } else { None }
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Contains the result of an equality or range lookup to the reader node.
 //#[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Hash)]
 #[derive(Debug)]
@@ -330,6 +447,13 @@ impl<T> ReaderLookup<T> {
             _ => false,
         }
     }
+
+    pub fn is_ok(&self) -> bool {
+        match self {
+            Self::Ok(..) => true,
+            _ => false,
+        }
+    }
 }
 
 
@@ -338,14 +462,14 @@ impl<T> ReaderLookup<T> {
 #[derive(Clone)]
 pub struct SingleReadHandle {
     handle: multir::Handle,
-    trigger: Option<Arc<dyn Fn(&[DataType]) -> bool + Send + Sync>>,
+    trigger: Option<Arc<dyn Fn(&KeyRange) -> bool + Send + Sync>>,
     key: Vec<usize>,
     operators: Vec<nom_sql::Operator>,
 }
 
 impl SingleReadHandle {
     /// Trigger a replay of a missing key from a partially materialized view.
-    pub fn trigger(&self, key: &[DataType]) -> bool {
+    pub fn trigger(&self, key: &KeyRange) -> bool {
         assert!(
             self.trigger.is_some(),
             "tried to trigger a replay for a fully materialized view"

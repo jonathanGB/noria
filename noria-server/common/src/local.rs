@@ -3,6 +3,7 @@ use noria::DataType;
 use petgraph::graph::NodeIndex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
+use std::ops::Bound;
 use std::fmt;
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -126,6 +127,9 @@ pub enum KeyType<'a> {
     Quad((DataType, DataType, DataType, DataType)),
     Quin((DataType, DataType, DataType, DataType, DataType)),
     Sex((DataType, DataType, DataType, DataType, DataType, DataType)),
+    RangeSingle((Bound<DataType>, Bound<DataType>)),
+    RangeDouble((Bound<(DataType, DataType)>, Bound<(DataType, DataType)>)),
+    RangeMany((Bound<Vec<DataType>>, Bound<Vec<DataType>>)),
 }
 
 impl<'a> KeyType<'a> {

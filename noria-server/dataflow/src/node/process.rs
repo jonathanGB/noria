@@ -1,6 +1,7 @@
 use crate::node::NodeType;
 use crate::payload;
 use crate::prelude::*;
+use crate::KeyRange;
 use std::collections::HashSet;
 use std::mem;
 
@@ -228,7 +229,7 @@ impl Node {
         &mut self,
         from: LocalNodeIndex,
         key_columns: &[usize],
-        keys: &mut Vec<Vec<DataType>>,
+        keys: &mut Vec<KeyRange>,
         tag: Tag,
         on_shard: Option<usize>,
         ex: &mut dyn Executor,

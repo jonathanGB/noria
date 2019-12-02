@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::prelude::*;
+use crate::KeyRange;
 
 // pub mod latest;
 pub mod aggregate;
@@ -216,7 +217,7 @@ where
                                     lookups.push(Lookup {
                                         on: *us,
                                         cols: out_key.clone(),
-                                        key: group.clone(),
+                                        key: KeyRange::Point(group.clone()),
                                     });
                                 }
 

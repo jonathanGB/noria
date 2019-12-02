@@ -5,6 +5,7 @@ use serde;
 use tempfile::{tempdir, TempDir};
 
 use crate::prelude::*;
+use crate::KeyRange;
 use crate::state::{RecordResult, State};
 use common::SizeOf;
 
@@ -192,19 +193,19 @@ impl State for PersistentState {
         false
     }
 
-    fn mark_filled(&mut self, _: Vec<DataType>, _: Tag) {
+    fn mark_filled(&mut self, _: KeyRange, _: Tag) {
         unreachable!("PersistentState can't be partial")
     }
 
-    fn mark_hole(&mut self, _: &[DataType], _: Tag) {
+    fn mark_hole(&mut self, _: &KeyRange, _: Tag) {
         unreachable!("PersistentState can't be partial")
     }
 
-    fn evict_random_keys(&mut self, _: usize) -> (&[usize], Vec<Vec<DataType>>, u64) {
+    fn evict_random_keys(&mut self, _: usize) -> (&[usize], Vec<KeyRange>, u64) {
         unreachable!("can't evict keys from PersistentState")
     }
 
-    fn evict_keys(&mut self, _: Tag, _: &[Vec<DataType>]) -> Option<(&[usize], u64)> {
+    fn evict_keys(&mut self, _: Tag, _: &[KeyRange]) -> Option<(&[usize], u64)> {
         unreachable!("can't evict keys from PersistentState")
     }
 
@@ -425,6 +426,9 @@ impl PersistentState {
             KeyType::Quad(k) => serialize(k, extra),
             KeyType::Quin(k) => serialize(k, extra),
             KeyType::Sex(k) => serialize(k, extra),
+            KeyType::RangeSingle(k) => serialize(k, extra),
+            KeyType::RangeDouble(k) => serialize(k, extra),
+            KeyType::RangeMany(k) => serialize(k, extra),
         }
     }
 

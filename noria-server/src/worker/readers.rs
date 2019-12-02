@@ -1,6 +1,7 @@
 use async_bincode::AsyncBincodeStream;
 use dataflow::prelude::DataType;
 use dataflow::prelude::*;
+use dataflow::KeyRange;
 use dataflow::ReaderLookup;
 use dataflow::Readers;
 use dataflow::SingleReadHandle;
@@ -270,15 +271,9 @@ fn handle_message(
                 };
 
                 let mut ready = true;
-                let mut replaying = false;
                 let mut missing_ranges = Vec::new();
                 for (i, res) in found {
                     println!("Res: {:?}", res);
-                    if res.is_miss() {
-                        replaying = true;
-                        missing_ranges.push(res);
-                        continue;
-                    }
 
                     match res {
                         ReaderLookup::Ok(rs, _) => {
@@ -290,7 +285,28 @@ fn handle_message(
                             ready = false;
                             break;
                         }
-                        _ => unreachable!(),
+                        ReaderLookup::MissPoint(p) => {
+                            // Miss a point (during non-range query).
+                            missing_ranges.push(KeyRange::Point(p));
+                        }
+                        ReaderLookup::MissRangeSingle(misses) => {
+                            // Miss one or many "single" ranges.
+                            for (start, end) in misses {
+                                missing_ranges.push(KeyRange::RangeSingle(start, end));
+                            }
+                        }
+                        ReaderLookup::MissRangeDouble(misses) => {
+                            // Miss one or many "double" ranges.
+                            for (start, end) in misses {
+                                missing_ranges.push(KeyRange::RangeDouble(start, end));
+                            }
+                        }
+                        ReaderLookup::MissRangeMany(misses) => {
+                            // Miss one or many "many" ranges.
+                            for (start, end) in misses {
+                                missing_ranges.push(KeyRange::RangeMany(start, end));
+                            }
+                        }
                     }
                 }
 
@@ -301,7 +317,7 @@ fn handle_message(
                     });
                 }
 
-                if !replaying {
+                if missing_ranges.is_empty() {
                     // we hit on all the keys!
                     return Ok(Tagged {
                         tag,
@@ -312,8 +328,7 @@ fn handle_message(
                 // TODO(jonathangb): trigger range replays.
                 // trigger backfills for all the keys we missed on for later
                 for missing_range in &missing_ranges {
-                    // TODO(jonathangb): trigger replay.
-                    //reader.trigger(missing_range);
+                    reader.trigger(missing_range);
                 }
 
                 Err((ret, missing_ranges))
@@ -376,7 +391,7 @@ struct BlockingRead {
 
     trigger_timeout: time::Duration,
     next_trigger: time::Instant,
-    missing_ranges: Vec<ReaderLookup<Vec<Vec<DataType>>>>,
+    missing_ranges: Vec<KeyRange>,
 }
 
 impl Future for BlockingRead {

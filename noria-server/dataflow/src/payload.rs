@@ -1,3 +1,4 @@
+use crate::backlog::KeyRange;
 use petgraph;
 use serde::{Deserialize, Serialize};
 
@@ -64,7 +65,7 @@ pub enum InitialState {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ReplayPieceContext {
     Partial {
-        for_keys: HashSet<Vec<DataType>>,
+        for_keys: HashSet<KeyRange>, // TODO(jonathangb): switch to KeyRange?
         unishard: bool,
         ignore: bool,
     },
@@ -117,7 +118,7 @@ pub enum Packet {
     EvictKeys {
         link: Link,
         tag: Tag,
-        keys: Vec<Vec<DataType>>,
+        keys: Vec<KeyRange>,
     },
 
     //
@@ -197,7 +198,7 @@ pub enum Packet {
     /// Ask domain (nicely) to replay a particular key.
     RequestPartialReplay {
         tag: Tag,
-        key: Vec<DataType>,
+        key: KeyRange,
         unishard: bool,
     },
 
@@ -205,7 +206,7 @@ pub enum Packet {
     RequestReaderReplay {
         node: LocalNodeIndex,
         cols: Vec<usize>,
-        key: Vec<DataType>,
+        key: KeyRange,
     },
 
     /// Instruct domain to replay the state of a particular node along an existing replay path.

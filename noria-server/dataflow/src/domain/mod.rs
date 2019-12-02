@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time;
 
+use crate::KeyRange;
 use crate::group_commit::GroupCommitQueueSet;
 use crate::payload::{ControlReplyPacket, ReplayPieceContext, SourceSelection};
 use crate::prelude::*;
@@ -80,12 +81,12 @@ struct ReplayPath {
     trigger: TriggerEndpoint,
 }
 
-type Hole = (Vec<usize>, Vec<DataType>);
+type Hole = (Vec<usize>, KeyRange);
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 struct Redo {
     tag: Tag,
-    replay_key: Vec<DataType>,
+    replay_key: KeyRange,
     unishard: bool,
 }
 
@@ -208,7 +209,7 @@ struct TimedPurge {
     time: time::Instant,
     view: LocalNodeIndex,
     tag: Tag,
-    keys: HashSet<Vec<DataType>>,
+    keys: HashSet<KeyRange>,
 }
 
 pub struct Domain {
@@ -229,21 +230,21 @@ pub struct Domain {
     mode: DomainMode,
     waiting: Map<Waiting>,
     replay_paths: HashMap<Tag, ReplayPath>,
-    reader_triggered: Map<HashSet<Vec<DataType>>>,
+    reader_triggered: Map<HashSet<KeyRange>>,
     timed_purges: VecDeque<TimedPurge>,
 
     replay_paths_by_dst: Map<HashMap<Vec<usize>, Vec<Tag>>>,
 
     concurrent_replays: usize,
     max_concurrent_replays: usize,
-    replay_request_queue: VecDeque<(Tag, Vec<DataType>)>,
+    replay_request_queue: VecDeque<(Tag, KeyRange)>,
 
     shutdown_valve: Valve,
     readers: Readers,
     control_reply_tx: TcpSender<ControlReplyPacket>,
     channel_coordinator: Arc<ChannelCoordinator>,
 
-    buffered_replay_requests: HashMap<Tag, (time::Instant, HashSet<Vec<DataType>>, bool)>,
+    buffered_replay_requests: HashMap<Tag, (time::Instant, HashSet<KeyRange>, bool)>,
     replay_batch_timeout: time::Duration,
     delayed_for_self: VecDeque<Box<Packet>>,
 
@@ -265,7 +266,7 @@ pub struct Domain {
 impl Domain {
     fn find_tags_and_replay(
         &mut self,
-        miss_key: Vec<DataType>,
+        miss_key: KeyRange,
         miss_columns: &[usize],
         miss_in: LocalNodeIndex,
     ) {
@@ -329,8 +330,8 @@ impl Domain {
         &mut self,
         miss_in: LocalNodeIndex,
         miss_columns: &[usize],
-        replay_key: Vec<DataType>,
-        miss_key: Vec<DataType>,
+        replay_key: KeyRange,
+        miss_key: KeyRange,
         was_single_shard: bool,
         needed_for: Tag,
     ) {
@@ -375,7 +376,7 @@ impl Domain {
         self.find_tags_and_replay(miss_key, miss_columns, miss_in);
     }
 
-    fn send_partial_replay_request(&mut self, tag: Tag, key: Vec<DataType>) {
+    fn send_partial_replay_request(&mut self, tag: Tag, key: KeyRange) {
         debug_assert!(self.concurrent_replays < self.max_concurrent_replays);
         if let TriggerEndpoint::End {
             source,
@@ -393,9 +394,11 @@ impl Domain {
                 SourceSelection::KeyShard { key_i_to_shard, .. } => Some(key_i_to_shard),
             };
 
-            if ask_shard_by_key_i.is_none() && options.len() != 1 {
+            if !key.is_point() || ask_shard_by_key_i.is_none() && options.len() != 1 {
                 // source is sharded by a different key than we are doing lookups for,
                 // so we need to trigger on all the shards.
+                // TODO(jonathangb): we send to all shards if we have a range lookup,
+                // as we can't shard ranges (yet?).
                 self.concurrent_replays += 1;
                 trace!(self.log, "sending shuffled shard replay request";
                 "tag" => ?tag,
@@ -422,7 +425,8 @@ impl Domain {
             let shard = if options.len() == 1 {
                 0
             } else if let Some(key_shard_i) = ask_shard_by_key_i {
-                crate::shard_by(&key[key_shard_i], options.len())
+                assert!(key.is_point(), "We can't shard a non-point key");
+                crate::shard_by(&key.get_ref_key_point()[key_shard_i], options.len())
             } else {
                 // would have hit the if further up
                 unreachable!();
@@ -449,7 +453,7 @@ impl Domain {
         }
     }
 
-    fn request_partial_replay(&mut self, tag: Tag, key: Vec<DataType>) {
+    fn request_partial_replay(&mut self, tag: Tag, key: KeyRange) {
         if self.concurrent_replays < self.max_concurrent_replays {
             assert_eq!(self.replay_request_queue.len(), 0);
             self.send_partial_replay_request(tag, key);
@@ -649,7 +653,7 @@ impl Domain {
                         evictions
                             .entry(tag)
                             .or_insert_with(HashSet::new)
-                            .insert(keys.iter().map(|&key| miss.record[key].clone()).collect());
+                            .insert(KeyRange::Point(keys.iter().map(|&key| miss.record[key].clone()).collect()));
                     }
                 }
 
@@ -906,14 +910,21 @@ impl Domain {
                                 let (mut r_part, w_part) =
                                     backlog::new_partial(cols, &k[..], move |miss| {
                                         let n = txs.len();
-                                        let tx = if n == 1 {
-                                            &txs[0]
+                                        if n == 1 {
+                                            let tx = &txs[0];
+                                            tx.clone().try_send(miss.clone()).is_ok()
                                         } else {
-                                            // TODO: compound reader
-                                            assert_eq!(miss.len(), 1);
-                                            &txs[crate::shard_by(&miss[0], n)]
-                                        };
-                                        tx.clone().try_send(Vec::from(miss)).is_ok()
+                                            if let Some(shard_key) = miss.get_single_key() {
+                                                let tx = &txs[crate::shard_by(shard_key, n)];
+                                                tx.clone().try_send(miss.clone()).is_ok()
+                                            } else {
+                                                txs.iter()
+                                                    .map(|tx| tx.clone()
+                                                                .try_send(miss.clone())
+                                                                .is_ok())
+                                                    .all(|ok| ok)
+                                            }
+                                        }
                                     });
 
                                 let mut n = self.nodes[node].borrow_mut();
@@ -1040,11 +1051,20 @@ impl Domain {
                                     .expect("reader replay requested for non-materialized reader");
                                 // ensure that all writes have been applied
                                 w.swap();
-                                w.with_key(&key[..])
-                                    .try_find_and(|_| ())
-                                    .expect("reader replay requested for non-ready reader")
-                                    .0
-                                    .is_none()
+                                let whe = w.with_key(Cow::Borrowed(&key));
+                                if key.is_point() {
+                                    whe.try_find_and(|_| ())
+                                        .is_miss()
+                                } else {
+                                    whe.try_find_range_and(|_| ())
+                                        .is_miss()
+                                }
+
+                                // w.with_key(&key[..])
+                                //     .try_find_and(|_| ())
+                                //     .expect("reader replay requested for non-ready reader")
+                                //     .0
+                                //     .is_none()
                             })
                             .expect("reader replay requested for non-reader node");
 
@@ -1068,7 +1088,7 @@ impl Domain {
                            "key" => format!("{:?}", key)
                         );
                         self.total_replay_time.start();
-                        self.seed_replay(tag, &key[..], unishard, executor);
+                        self.seed_replay(tag, key, unishard, executor);
                         self.total_replay_time.stop();
                     }
                     Packet::StartReplay { tag, from } => {
@@ -1401,7 +1421,7 @@ impl Domain {
                 node.with_reader_mut(|r| {
                     if let Some(wh) = r.writer_mut() {
                         for key in tp.keys {
-                            wh.mut_with_key(&key[..]).mark_hole();
+                            wh.mut_with_key(Cow::Owned(key)).mark_hole();
                         }
                         swap.insert(tp.view);
                     }
@@ -1459,7 +1479,7 @@ impl Domain {
     fn seed_all(
         &mut self,
         tag: Tag,
-        keys: HashSet<Vec<DataType>>,
+        keys: HashSet<KeyRange>,
         single_shard: bool,
         ex: &mut dyn Executor,
     ) {
@@ -1483,7 +1503,7 @@ impl Domain {
 
                 let mut rs = Vec::new();
                 let (keys, misses): (HashSet<_>, _) = keys.into_iter().partition(|key| match state
-                    .lookup(&cols[..], &KeyType::from(key))
+                    .lookup(&cols[..], &key.to_key_type())
                 {
                     LookupResult::Some(res) => {
                         rs.extend(res.into_iter().map(|r| self.seed_row(source, r)));
@@ -1553,7 +1573,7 @@ impl Domain {
     fn seed_replay(
         &mut self,
         tag: Tag,
-        key: &[DataType],
+        key: KeyRange,
         single_shard: bool,
         ex: &mut dyn Executor,
     ) {
@@ -1569,7 +1589,6 @@ impl Domain {
             // maybe delay this seed request so that we can batch respond later?
             // TODO
             use std::collections::hash_map::Entry;
-            let key = Vec::from(key);
             match self.buffered_replay_requests.entry(tag) {
                 Entry::Occupied(o) => {
                     assert!(!o.get().1.is_empty());
@@ -1603,10 +1622,10 @@ impl Domain {
                     .state
                     .get(source)
                     .expect("migration replay path started with non-materialized node")
-                    .lookup(&cols[..], &KeyType::from(&key[..]));
+                    .lookup(&cols[..], &key.to_key_type());
 
                 let mut k = HashSet::new();
-                k.insert(Vec::from(key));
+                k.insert(key.clone());
                 if let LookupResult::Some(rs) = rs {
                     use std::iter::FromIterator;
                     let data = Records::from_iter(rs.into_iter().map(|r| self.seed_row(source, r)));
@@ -1635,8 +1654,8 @@ impl Domain {
             self.on_replay_miss(
                 source,
                 &cols[..],
-                Vec::from(key),
-                Vec::from(key),
+                key.clone(),
+                key.clone(),
                 single_shard,
                 tag,
             );
@@ -1769,6 +1788,9 @@ impl Domain {
                                     path.first().unwrap().partial_key.as_ref().unwrap();
                                 data.retain(|r| {
                                     for_keys.iter().any(|k| {
+                                        // TODO(jonathangb): can we assume it is a point?
+                                        assert!(k.is_point());
+                                        let k = k.get_ref_key_point();
                                         partial_keys.iter().enumerate().all(|(i, c)| r[*c] == k[i])
                                     })
                                 });
@@ -1830,7 +1852,7 @@ impl Domain {
                                     // filled, even if that hole is empty!
                                     if let Some(wh) = r.writer_mut() {
                                         for key in backfill_keys.iter() {
-                                            wh.mut_with_key(&key[..]).mark_filled();
+                                            wh.mut_with_key(Cow::Borrowed(key)).mark_filled();
                                         }
                                     }
                                 })
@@ -1864,7 +1886,7 @@ impl Domain {
                             let mut missed_on = HashSet::with_capacity(misses.len());
                             for miss in &misses {
                                 let k: Vec<_> = miss.replay_key_vec().unwrap();
-                                missed_on.insert(k);
+                                missed_on.insert(KeyRange::Point(k));
                             }
                             missed_on
                         } else {
@@ -1877,13 +1899,13 @@ impl Domain {
                                 // it's important that we clear out any partially-filled holes.
                                 if let Some(state) = self.state.get_mut(segment.node) {
                                     for miss in &missed_on {
-                                        state.mark_hole(&miss[..], tag);
+                                        state.mark_hole(&miss, tag);
                                     }
                                 } else {
                                     n.with_reader_mut(|r| {
                                         if let Some(wh) = r.writer_mut() {
                                             for miss in &missed_on {
-                                                wh.mut_with_key(&miss[..]).mark_hole();
+                                                wh.mut_with_key(Cow::Borrowed(miss)).mark_hole();
                                             }
                                         }
                                     })
@@ -1902,7 +1924,7 @@ impl Domain {
                                     self.reader_triggered.get_mut(segment.node)
                                 {
                                     for key in backfill_keys.as_ref().unwrap().iter() {
-                                        prev.remove(&key[..]);
+                                        prev.remove(&key);
                                     }
                                 }
                             }
@@ -1913,13 +1935,13 @@ impl Domain {
                             // so we didn't *actually* fill those keys after all!
                             if let Some(state) = self.state.get_mut(segment.node) {
                                 for key in &captured {
-                                    state.mark_hole(&key[..], tag);
+                                    state.mark_hole(&KeyRange::Point(key.clone()), tag);
                                 }
                             } else {
                                 n.with_reader_mut(|r| {
                                     if let Some(wh) = r.writer_mut() {
                                         for key in &captured {
-                                            wh.mut_with_key(&key[..]).mark_hole();
+                                            wh.mut_with_key(Cow::Owned(KeyRange::Point(key.clone()))).mark_hole();
                                         }
                                     }
                                 })
@@ -1972,7 +1994,7 @@ impl Domain {
                             backfill_keys
                                 .as_mut()
                                 .unwrap()
-                                .retain(|k| for_keys.contains(&k[..]));
+                                .retain(|k| for_keys.contains(&k));
                         }
 
                         // if we missed during replay, we need to do another replay
@@ -2013,10 +2035,10 @@ impl Domain {
                                     // XXX: this clone and collect here is *really* sad
                                     let r = r.rec();
                                     !missed_on.contains(
-                                        &partial_col
+                                        &KeyRange::Point(partial_col
                                             .iter()
                                             .map(|&c| r[c].clone())
-                                            .collect::<Vec<_>>(),
+                                            .collect::<Vec<_>>()),
                                     )
                                 })
                             });
@@ -2076,7 +2098,7 @@ impl Domain {
                                             .expect("replay sourced at non-materialized node");
                                         trace!(self.log, "clearing keys from purgeable replay source after replay"; "node" => n.global_addr().index(), "keys" => ?backfill_keys.as_ref().unwrap());
                                         for key in backfill_keys.as_ref().unwrap().iter() {
-                                            state.mark_hole(&key[..], tag);
+                                            state.mark_hole(&key, tag);
                                         }
                                     }
                                 }
@@ -2160,7 +2182,7 @@ impl Domain {
                                     if let Some(tag) = evict_tag {
                                         // NOTE: this assumes that the key order is the same
                                         trace!(self.log, "clearing keys from purgeable materialization after replay"; "node" => self.nodes[pn].borrow().global_addr().index(), "key" => ?&lookup.key);
-                                        state.mark_hole(&lookup.key[..], tag);
+                                        state.mark_hole(&lookup.key, tag);
                                     } else {
                                         unreachable!(
                                             "no tag found for lookup target {:?}({:?}) (really {:?})",
@@ -2284,8 +2306,8 @@ impl Domain {
             self.on_replay_miss(
                 node,
                 &miss_cols[..],
-                while_replaying_key,
-                miss_key,
+                KeyRange::Point(while_replaying_key),
+                KeyRange::Point(miss_key),
                 single_shard,
                 tag,
             );
@@ -2476,7 +2498,7 @@ impl Domain {
         fn trigger_downstream_evictions(
             log: &Logger,
             key_columns: &[usize],
-            keys: &[Vec<DataType>],
+            keys: &[KeyRange],
             node: LocalNodeIndex,
             ex: &mut dyn Executor,
             not_ready: &HashSet<LocalNodeIndex>,
@@ -2537,7 +2559,7 @@ impl Domain {
 
         fn walk_path(
             path: &[ReplayPathSegment],
-            keys: &mut Vec<Vec<DataType>>,
+            keys: &mut Vec<KeyRange>,
             tag: Tag,
             shard: Option<usize>,
             nodes: &mut DomainNodes,
