@@ -418,29 +418,81 @@ impl Future for BlockingRead {
                         continue;
                     }
 
-                    assert!(missed_range.is_point()); // TODO(jonathangb): handle non-point ranges
-                    let key = missed_range.get_ref_key_point().clone();
-                    match reader.try_find_and(key, dup) {
-                        ReaderLookup::Err => {
-                            // map has been deleted, so server is shutting down
-                            return Err(());
-                        }
-                        ReaderLookup::Ok(rs, _) => {
-                            this.read[*i] = rs.into_iter().flatten().collect();
-                            *still_missing = false;
-                        }
-                        ReaderLookup::MissPoint(miss) => {
-                            if now > *this.next_trigger {
-                                if !reader.trigger(&KeyRange::Point(miss)) {
-                                    return Err(());
+                    if missed_range.is_point() {
+                        let key = missed_range.get_ref_key_point().clone();
+                        match reader.try_find_and(key, dup) {
+                            ReaderLookup::Err => {
+                                // map has been deleted, so server is shutting down
+                                return Err(());
+                            }
+                            ReaderLookup::Ok(rs, _) => {
+                                this.read[*i] = rs.into_iter().flatten().collect();
+                                *still_missing = false;
+                            }
+                            ReaderLookup::MissPoint(miss) => {
+                                if now > *this.next_trigger {
+                                    if !reader.trigger(&KeyRange::Point(miss)) {
+                                        return Err(());
+                                    }
+
+                                    triggered = true;
                                 }
 
-                                triggered = true;
+                                missing = true;
                             }
-
-                            missing = true;
+                            _ => unimplemented!(),
                         }
-                        _ => unimplemented!(),
+                    } else {
+                        match reader.try_find_range_and(missed_range.clone().get_vec_range(), dup) {
+                            ReaderLookup::Err => {
+                                // map has been deleted, so server is shutting down
+                                return Err(());      
+                            }
+                            ReaderLookup::Ok(rs, _) => {
+                                this.read[*i] = rs.into_iter().flatten().collect();
+                                *still_missing = false;        
+                            }
+                            ReaderLookup::MissRangeSingle(misses) => {
+                                if now > *this.next_trigger {
+                                    for (start, end) in misses {
+                                        if !reader.trigger(&KeyRange::RangeSingle(start, end)) {
+                                            return Err(());
+                                        }
+                                    }
+
+                                    triggered = true;
+                                }
+
+                                missing = true;     
+                            }
+                            ReaderLookup::MissRangeDouble(misses) => {
+                                if now > *this.next_trigger {
+                                    for (start, end) in misses {
+                                        if !reader.trigger(&KeyRange::RangeDouble(start, end)) {
+                                            return Err(());
+                                        }
+                                    }
+
+                                    triggered = true;
+                                }
+
+                                missing = true;
+                            }
+                            ReaderLookup::MissRangeMany(misses) => {
+                                if now > *this.next_trigger {
+                                    for (start, end) in misses {
+                                        if !reader.trigger(&KeyRange::RangeMany(start, end)) {
+                                            return Err(());
+                                        }
+                                    }
+
+                                    triggered = true;
+                                }
+
+                                missing = true;
+                            }
+                            ReaderLookup::MissPoint(_) => unreachable!(),
+                        }
                     }
                 }
                 /*for (i, key) in this.keys.iter_mut().enumerate() {

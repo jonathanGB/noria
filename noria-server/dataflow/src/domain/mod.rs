@@ -1843,7 +1843,8 @@ impl Domain {
                             // triggered this replay initially.
                             if let Some(state) = self.state.get_mut(segment.node) {
                                 for key in backfill_keys.iter() {
-                                    state.mark_filled(key.clone(), tag);
+                                    assert!(key.is_point());
+                                    state.mark_filled(key.get_ref_key_point().clone(), tag);
                                 }
                             } else {
                                 n.with_reader_mut(|r| {

@@ -115,7 +115,7 @@ impl State for MemoryState {
         self.state.iter().map(SingleState::rows).sum()
     }
 
-    fn mark_filled(&mut self, key: KeyRange, tag: Tag) {
+    fn mark_filled(&mut self, key: Vec<DataType>, tag: Tag) {
         debug_assert!(!self.state.is_empty(), "filling uninitialized index");
         let index = self.by_tag[&tag];
         self.state[index].mark_filled(key);

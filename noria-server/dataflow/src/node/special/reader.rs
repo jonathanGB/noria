@@ -212,12 +212,25 @@ impl Reader {
                 });
             }
 
-            // TODO(jonathangb): We should call a new `add_range` when we have a range.
-            // I don't think we have the required info
+            // Call `add_range` if we have an interval as a key,
+            // otherwise call `add`.
+            let keys = m.take_replay_piece_context_keys();
             if self.streamers.is_empty() {
-                state.add(m.take_data());
+                let data = m.take_data();
+
+                if keys.is_none() || keys.as_ref().unwrap().iter().next().unwrap().is_point() {
+                    state.add(data);
+                } else {
+                    state.add_range(data, keys.unwrap());
+                }
             } else {
-                state.add(m.data().iter().cloned());
+                let data = m.data().iter().cloned();
+
+                if keys.is_none() || keys.as_ref().unwrap().iter().next().unwrap().is_point() {
+                    state.add(data);
+                } else {
+                    state.add_range(data, keys.unwrap());
+                }
             }
 
             if swap {

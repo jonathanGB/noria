@@ -2,6 +2,7 @@ use crate::prelude::*;
 use common::SizeOf;
 use rand::prelude::*;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::ops::Bound;
 use std::sync::Arc;
 use std::ops::RangeBounds;
@@ -143,20 +144,32 @@ pub(crate) struct WriteHandleEntry<'a> {
 
 impl<'a> MutWriteHandleEntry<'a> {
     pub(crate) fn mark_filled(self) {
-        if !self.key.is_point() {
-            unimplemented!("Mark filled for ranges not implemented...")
+        if self.key.is_point() {
+            if self
+                .handle
+                .handle
+                .meta_get_and(Cow::Borrowed(&*self.key), |rs| rs.is_empty())
+                .is_miss()
+            {
+                self.handle.handle.clear(self.key)
+            } else {
+                unreachable!("attempted to fill already-filled key")
+            } 
+        } else {
+            // TODO(jonathangb): clear with range?
+            // if self
+            //     .handle
+            //     .handle
+            //     .meta_get_range_and(Cow::Borrowed(&*self.key), |rs| rs.is_empty())
+            //     .is_miss()
+            // {
+            //     self.handle.handle.clear(self.key)
+            // } else {
+            //     unreachable!("attempted to fill already-filled key")
+            // }
         }
 
-        if self
-            .handle
-            .handle
-            .meta_get_and(Cow::Borrowed(&*self.key), |rs| rs.is_empty())
-            .is_miss()
-        {
-            self.handle.handle.clear(self.key)
-        } else {
-            unreachable!("attempted to fill already-filled key");
-        }
+
     }
 
     pub(crate) fn mark_hole(self) {
@@ -283,6 +296,21 @@ impl WriteHandle {
         }
     }
 
+    pub(crate) fn add_range<I>(&mut self, rs: I, ranges: HashSet<KeyRange>)
+    where
+        I: IntoIterator<Item = Record>,
+    {
+        let mem_delta = self.handle.add_range(&self.key[..], self.cols, rs, ranges);
+        if mem_delta > 0 {
+            self.mem_size += mem_delta as usize;
+        } else if mem_delta < 0 {
+            self.mem_size = self
+                .mem_size
+                .checked_sub(mem_delta.checked_abs().unwrap() as usize)
+                .unwrap();
+        }
+    }
+
     pub(crate) fn is_partial(&self) -> bool {
         self.partial
     }
@@ -341,6 +369,27 @@ impl KeyRange {
         }
     }
 
+    pub fn is_single(&self) -> bool {
+        match self {
+            Self::RangeSingle(..) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_double(&self) -> bool {
+        match self {
+            Self::RangeDouble(..) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_many(&self) -> bool {
+        match self {
+            Self::RangeMany(..) => true,
+            _ => false,
+        }
+    }
+
     pub fn to_key_type<'a>(&'a self) -> common::KeyType<'a> {
         match self {
             Self::Point(range) => {
@@ -359,40 +408,6 @@ impl KeyRange {
             Self::RangeMany(start, end) => common::KeyType::RangeMany((start.clone(), end.clone())),
         }
     }
-
-    // pub fn to_key_type<'a>(&'a mut self) -> common::KeyType<'a> {
-    //     match self {
-    //         Self::Point(range) => {
-    //             match range.len() {
-    //                 1 => common::KeyType::Single(&range[0]),
-    //                 2 => common::KeyType::Double((range.swap_remove(0), range.swap_remove(1))),
-    //                 3 => common::KeyType::Tri((range.swap_remove(0), range.swap_remove(1), range.swap_remove(2))),
-    //                 4 => common::KeyType::Quad((range.swap_remove(0), range.swap_remove(1), range.swap_remove(2), range.swap_remove(3))),
-    //                 5 => common::KeyType::Quin((range.swap_remove(0), range.swap_remove(1), range.swap_remove(2), range.swap_remove(3), range.swap_remove(4))),
-    //                 6 => common::KeyType::Sex((range.swap_remove(0), range.swap_remove(1), range.swap_remove(2), range.swap_remove(3), range.swap_remove(4), range.swap_remove(5))),
-    //                 _ => unreachable!(),
-    //             }
-    //         }
-    //         Self::RangeSingle(start, end) => common::KeyType::RangeSingle((start.clone(), end.clone())),
-    //         Self::RangeDouble(start, end) => common::KeyType::RangeDouble((start.clone(), end.clone())),
-    //         Self::RangeMany(start, end) => common::KeyType::RangeMany((start.clone(), end.clone())),
-    //     }
-    // }
-
-    // pub fn len(&self) -> usize {
-    //     use std::ops::Bound::*;
-
-    //     match self {
-    //         Self::RangeSingle(..) => 1,
-    //         Self::RangeDouble(..) => 2,
-    //         Self::Point(ref bound, _) | Self::RangeMany(ref bound, _) => {
-    //             match bound {
-    //                 Unbounded => 0,
-    //                 Included(ref key) | Excluded(ref key) => key.len()
-    //             }
-    //         }
-    //     }
-    // }
 
     pub fn get_ref_key_point(&self) -> &Vec<DataType> {
         match self {
@@ -421,6 +436,41 @@ impl KeyRange {
                 if key.len() == 1 { Some(&key[0]) } else { None }
             }
             _ => None,
+        }
+    }
+
+    pub fn get_vec_range(self) -> (Bound<Vec<DataType>>, Bound<Vec<DataType>>) {
+        use std::ops::Bound::*;
+
+        match self {
+            Self::Point(key) => (Included(key.clone()), Included(key)),
+            Self::RangeSingle(start, end) => {
+                let start = match start {
+                    Included(start) => Included(vec![start]),
+                    Excluded(start) => Excluded(vec![start]),
+                    Unbounded => Unbounded, 
+                };
+                let end = match end {
+                    Included(end) => Included(vec![end]),
+                    Excluded(end) => Excluded(vec![end]),
+                    Unbounded => Unbounded,
+                };
+                (start, end)
+            }
+            Self::RangeDouble(start, end) => {
+                let start = match start {
+                    Included(start) => Included(vec![start.0, start.1]),
+                    Excluded(start) => Excluded(vec![start.0, start.1]),
+                    Unbounded => Unbounded,
+                };
+                let end = match end {
+                    Included(end) => Included(vec![end.0, end.1]),
+                    Excluded(end) => Excluded(vec![end.0, end.1]),
+                    Unbounded => Unbounded,
+                };
+                (start, end)
+            }
+            Self::RangeMany(start, end) => (start, end)
         }
     }
 }
@@ -524,6 +574,7 @@ impl SingleReadHandle {
 mod tests {
     use super::*;
 
+    // TODO(jonathangb): Fix all broken tests.
     #[test]
     fn store_works() {
         let a = vec![1.into(), "a".into()];

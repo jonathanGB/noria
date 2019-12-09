@@ -193,7 +193,7 @@ impl State for PersistentState {
         false
     }
 
-    fn mark_filled(&mut self, _: KeyRange, _: Tag) {
+    fn mark_filled(&mut self, _: Vec<DataType>, _: Tag) {
         unreachable!("PersistentState can't be partial")
     }
 

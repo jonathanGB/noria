@@ -47,7 +47,7 @@ impl SingleState {
     /// Inserts the given record, or returns false if a hole was encountered (and the record hence
     /// not inserted).
     pub(super) fn insert_row(&mut self, r: Row) -> bool {
-        use indexmap::map::Entry;
+        use std::collections::btree_map::Entry;
         match self.state {
             KeyedState::Single(ref mut map) => {
                 // treat this specially to avoid the extra Vec
@@ -122,131 +122,87 @@ impl SingleState {
         None
     }
 
-    pub(super) fn mark_filled(&mut self, key: KeyRange) {
-        let replaced = if key.is_point() {
-            let mut key = key.get_key_point().into_iter();
-            match self.state {
-                KeyedState::Single(ref mut map) => map.insert(key.next().unwrap(), Vec::new()),
-                KeyedState::Double(ref mut map) => {
-                    map.insert((key.next().unwrap(), key.next().unwrap()), Vec::new())
-                }
-                KeyedState::Tri(ref mut map) => map.insert(
-                    (
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                    ),
-                    Vec::new(),
-                ),
-                KeyedState::Quad(ref mut map) => map.insert(
-                    (
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                    ),
-                    Vec::new(),
-                ),
-                KeyedState::Quin(ref mut map) => map.insert(
-                    (
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                    ),
-                    Vec::new(),
-                ),
-                KeyedState::Sex(ref mut map) => map.insert(
-                    (
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                        key.next().unwrap(),
-                    ),
-                    Vec::new(),
-                ),
-                _ => unreachable!(),
+    pub(super) fn mark_filled(&mut self, key: Vec<DataType>) {
+        let mut key = key.into_iter();
+        let replaced = match self.state {
+            KeyedState::Single(ref mut map) => map.insert(key.next().unwrap(), Vec::new()),
+            KeyedState::Double(ref mut map) => {
+                map.insert((key.next().unwrap(), key.next().unwrap()), Vec::new())
             }
-        } else {
-            match self.state {
-                KeyedState::RangeSingle(ref mut map) => {
-                    if let KeyRange::RangeSingle(start, end) = key {
-                        map.insert((start, end), Vec::new())
-                    } else {
-                        unreachable!()
-                    }
-                }
-                KeyedState::RangeDouble(ref mut map) => {
-                    if let KeyRange::RangeDouble(start, end) = key {
-                        map.insert((start, end), Vec::new())
-                    } else {
-                        unreachable!()
-                    }
-                }
-                KeyedState::RangeMany(ref mut map) => {
-                    if let KeyRange::RangeMany(start, end) = key {
-                        map.insert((start, end), Vec::new())
-                    } else {
-                        unreachable!()
-                    }
-                }
-                _ => unreachable!(),
-            }
+            KeyedState::Tri(ref mut map) => map.insert(
+                (
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                ),
+                Vec::new(),
+            ),
+            KeyedState::Quad(ref mut map) => map.insert(
+                (
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                ),
+                Vec::new(),
+            ),
+            KeyedState::Quin(ref mut map) => map.insert(
+                (
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                ),
+                Vec::new(),
+            ),
+            KeyedState::Sex(ref mut map) => map.insert(
+                (
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                    key.next().unwrap(),
+                ),
+                Vec::new(),
+            ),
+            _ => unimplemented!(),
         };
 
         assert!(replaced.is_none());
     }
 
     pub(super) fn mark_hole(&mut self, key: &KeyRange) -> u64 {
-        let removed = match self.state {
-            KeyedState::Single(ref mut m) => m.swap_remove(&(key.get_ref_key_point()[0])),
-            KeyedState::Double(ref mut m) => {
-                m.swap_remove::<(DataType, _)>(&MakeKey::from_key(key.get_ref_key_point()))
-            }
-            KeyedState::Tri(ref mut m) => {
-                m.swap_remove::<(DataType, _, _)>(&MakeKey::from_key(key.get_ref_key_point()))
-            }
-            KeyedState::Quad(ref mut m) => {
-                m.swap_remove::<(DataType, _, _, _)>(&MakeKey::from_key(key.get_ref_key_point()))
-            }
-            KeyedState::Quin(ref mut m) => {
-                m.swap_remove::<(DataType, _, _, _, _)>(&MakeKey::from_key(key.get_ref_key_point()))
-            }
-            KeyedState::Sex(ref mut m) => {
-                m.swap_remove::<(DataType, _, _, _, _, _)>(&MakeKey::from_key(key.get_ref_key_point()))
-            }
-            KeyedState::RangeSingle(ref mut m) => {
-                if let KeyRange::RangeSingle(start, end) = key {
-                    m.swap_remove(&(start.clone(), end.clone()))
-                } else {
-                    unreachable!()
-                }
-            }
-            KeyedState::RangeDouble(ref mut m) => {
-                if let KeyRange::RangeDouble(start, end) = key {
-                    m.swap_remove(&(start.clone(), end.clone()))
-                } else {
-                    unreachable!()
-                }
-            }
-            KeyedState::RangeMany(ref mut m) => {
-                if let KeyRange::RangeMany(start, end) = key {
-                    m.swap_remove(&(start.clone(), end.clone()))
-                } else {
-                    unreachable!()
-                }
-            }
-        };
-        // mark_hole should only be called on keys we called mark_filled on
-        removed
-            .unwrap()
-            .iter()
-            .filter(|r| Rc::strong_count(&r.0) == 1)
-            .map(SizeOf::deep_size_of)
-            .sum()
+        // TODO(jonathangb): implement.
+        unimplemented!()
+
+        // assert!(key.is_point()); // TODO(jonathangb): iterate through range, and remove all concrete keys?
+        // let removed = match self.state {
+        //     KeyedState::Single(ref mut m) => m.swap_remove(&(key.get_ref_key_point()[0])),
+        //     KeyedState::Double(ref mut m) => {
+        //         m.swap_remove::<(DataType, _)>(&MakeKey::from_key(key.get_ref_key_point()))
+        //     }
+        //     KeyedState::Tri(ref mut m) => {
+        //         m.swap_remove::<(DataType, _, _)>(&MakeKey::from_key(key.get_ref_key_point()))
+        //     }
+        //     KeyedState::Quad(ref mut m) => {
+        //         m.swap_remove::<(DataType, _, _, _)>(&MakeKey::from_key(key.get_ref_key_point()))
+        //     }
+        //     KeyedState::Quin(ref mut m) => {
+        //         m.swap_remove::<(DataType, _, _, _, _)>(&MakeKey::from_key(key.get_ref_key_point()))
+        //     }
+        //     KeyedState::Sex(ref mut m) => {
+        //         m.swap_remove::<(DataType, _, _, _, _, _)>(&MakeKey::from_key(key.get_ref_key_point()))
+        //     }
+        // };
+        // // mark_hole should only be called on keys we called mark_filled on
+        // removed
+        //     .unwrap()
+        //     .iter()
+        //     .filter(|r| Rc::strong_count(&r.0) == 1)
+        //     .map(SizeOf::deep_size_of)
+        //     .sum()
     }
 
     pub(super) fn clear(&mut self) {
@@ -258,9 +214,6 @@ impl SingleState {
             KeyedState::Quad(ref mut map) => map.clear(),
             KeyedState::Quin(ref mut map) => map.clear(),
             KeyedState::Sex(ref mut map) => map.clear(),
-            KeyedState::RangeSingle(ref mut map) => map.clear(),
-            KeyedState::RangeDouble(ref mut map) => map.clear(),
-            KeyedState::RangeMany(ref mut map) => map.clear(),
         };
     }
 
@@ -297,9 +250,6 @@ impl SingleState {
             KeyedState::Quad(ref map) => Box::new(map.values()),
             KeyedState::Quin(ref map) => Box::new(map.values()),
             KeyedState::Sex(ref map) => Box::new(map.values()),
-            KeyedState::RangeSingle(ref map) => Box::new(map.values()),
-            KeyedState::RangeDouble(ref map) => Box::new(map.values()),
-            KeyedState::RangeMany(ref map) => Box::new(map.values()),
         }
     }
     pub(super) fn key(&self) -> &[usize] {
@@ -313,7 +263,7 @@ impl SingleState {
     }
     pub(super) fn lookup<'a>(&'a self, key: &KeyType) -> LookupResult<'a> {
         if let Some(rs) = self.state.lookup(key) {
-            LookupResult::Some(RecordResult::Borrowed(&rs[..]))
+            LookupResult::Some(rs)
         } else if self.partial() {
             // partially materialized, so this is a hole (empty results would be vec![])
             LookupResult::Missing

@@ -323,6 +323,16 @@ impl Packet {
         mem::replace(inner, Records::default())
     }
 
+    pub fn take_replay_piece_context_keys(&mut self) -> Option<HashSet<KeyRange>> {
+        use std::mem;
+        match self {
+            Self::ReplayPiece { context: ReplayPieceContext::Partial { ref mut for_keys, .. }, .. } => {
+                Some(mem::replace(for_keys, HashSet::default()))
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn clone_data(&self) -> Self {
         match *self {
             Packet::Message {

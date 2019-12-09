@@ -1,6 +1,7 @@
 use super::{key_to_double, key_to_single, Key, ReaderLookup, KeyRange};
 use crate::prelude::*;
 use evmap;
+use std::collections::HashSet;
 use std::ops::Bound::Unbounded;
 use std::borrow::Cow;
 
@@ -254,6 +255,101 @@ impl Handle {
                 }
             }
         }
+        memory_delta
+    }
+
+    pub fn add_range<I>(&mut self, key: &[usize], cols: usize, rs: I, ranges: HashSet<KeyRange>) -> isize
+    where
+        I: IntoIterator<Item = Record>,
+    {
+        let mut memory_delta = 0isize;
+
+        match self {
+            Handle::Single(ref mut h) => {
+                assert_eq!(key.len(), 1);
+                let ranges = ranges
+                    .into_iter()
+                    .map(|range| {
+                       if let KeyRange::RangeSingle(start, end) = range {
+                           (start, end)
+                       } else {
+                           unreachable!()
+                       }
+                    });
+
+                let rs = rs
+                    .into_iter()
+                    .map(|r| {
+                        debug_assert!(r.len() >= cols);
+
+                        match r {
+                            Record::Positive(r) => {
+                                memory_delta += r.deep_size_of() as isize;
+                                (r[key[0]].clone(), r)
+                            }
+                            Record::Negative(_) => unimplemented!(),
+                        }
+                    });
+                
+                h.insert_range(rs, ranges);
+            }
+            Handle::Double(ref mut h) => {
+                assert_eq!(key.len(), 2);
+                let ranges = ranges
+                    .into_iter()
+                    .map(|range| {
+                        if let KeyRange::RangeDouble(start, end) = range {
+                            (start, end)
+                        } else {
+                            unreachable!()
+                        }
+                    });
+
+                let rs = rs
+                    .into_iter()
+                    .map(|r| {
+                        debug_assert!(r.len() >= cols);
+
+                        match r {
+                            Record::Positive(r) => {
+                                memory_delta += r.deep_size_of() as isize;
+                                ((r[key[0]].clone(), r[key[1]].clone()), r)
+                            }
+                            Record::Negative(_) => unimplemented!(),
+                        }
+                    });
+                
+                h.insert_range(rs, ranges);
+            }
+            Handle::Many(ref mut h) => {
+                let ranges = ranges
+                    .into_iter()
+                    .map(|range| {
+                        if let KeyRange::RangeMany(start, end) = range {
+                            (start, end)
+                        } else {
+                            unreachable!()
+                        }
+                    });
+
+                let rs = rs
+                    .into_iter()
+                    .map(|r| {
+                        debug_assert!(r.len() >= cols);
+                        let key = key.iter().map(|&k| &r[k]).cloned().collect();
+                        match r {
+                            Record::Positive(r) => {
+                                memory_delta += r.deep_size_of() as isize;
+                                (key, r)
+                            }
+                            Record::Negative(_) => unimplemented!(),
+                        }
+                    });
+
+                h.insert_range(rs, ranges);
+            }
+        }
+
         memory_delta
     }
 }

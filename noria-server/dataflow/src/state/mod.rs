@@ -32,7 +32,7 @@ pub(crate) trait State: SizeOf + Send {
 
     fn mark_hole(&mut self, key: &KeyRange, tag: Tag);
 
-    fn mark_filled(&mut self, key: KeyRange, tag: Tag);
+    fn mark_filled(&mut self, key: Vec<DataType>, tag: Tag);
 
     fn lookup<'a>(&'a self, columns: &[usize], key: &KeyType) -> LookupResult<'a>;
 
