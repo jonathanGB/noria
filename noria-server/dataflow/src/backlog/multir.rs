@@ -20,7 +20,7 @@ impl Handle {
         }
     }
 
-    pub(super) fn meta_get_and<F, T>(&self, key: Vec<DataType>, then: F) -> ReaderLookup<T>
+    pub(super) fn meta_get_and<F, T>(&self, key: &[DataType], then: F) -> ReaderLookup<T>
     where
         F: FnOnce(&[Vec<DataType>]) -> T,
     {
@@ -29,7 +29,7 @@ impl Handle {
                 assert_eq!(key.len(), 1);
                 match h.meta_get_and(&key[0], then) {
                     None => ReaderLookup::Err,
-                    Some((None, _)) => ReaderLookup::MissPoint(key),
+                    Some((None, _)) => ReaderLookup::MissPoint(key.to_vec()),
                     Some((Some(res), metadata)) => ReaderLookup::Ok(vec![res], metadata),
                 }
                 
@@ -60,15 +60,15 @@ impl Handle {
                     let stack_key = mem::transmute::<_, &(DataType, DataType)>(&stack_key);
                     match h.meta_get_and(&stack_key, then) {
                         None => ReaderLookup::Err,
-                        Some((None, _)) => ReaderLookup::MissPoint(key),
+                        Some((None, _)) => ReaderLookup::MissPoint(key.to_vec()),
                         Some((Some(res), metadata)) => ReaderLookup::Ok(vec![res], metadata),
                     }
                 }
             }
             Handle::Many(ref h) => {
-                match h.meta_get_and(&key, then) {
+                match h.meta_get_and(key, then) {
                     None => ReaderLookup::Err,
-                    Some((None, _)) => ReaderLookup::MissPoint(key),
+                    Some((None, _)) => ReaderLookup::MissPoint(key.to_vec()),
                     Some((Some(res), metadata)) => ReaderLookup::Ok(vec![res], metadata),
                 }
             }

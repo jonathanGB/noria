@@ -134,7 +134,7 @@ fn handle_message(
                 let found : Vec<_> = if operators.iter().all(|op| *op == Operator::Equal) {
                     keys
                         .into_iter()
-                        .map(|key| reader.try_find_and(key, dup))
+                        .map(|ref key| reader.try_find_and(key, dup))
                         .enumerate()
                         .collect()
                 } else if operators.len() == 1 && operators[0] != Operator::Equal { 
@@ -419,7 +419,7 @@ impl Future for BlockingRead {
                     }
 
                     if missed_range.is_point() {
-                        let key = missed_range.get_ref_key_point().clone();
+                        let key = missed_range.get_ref_key_point();
                         match reader.try_find_and(key, dup) {
                             ReaderLookup::Err => {
                                 // map has been deleted, so server is shutting down
