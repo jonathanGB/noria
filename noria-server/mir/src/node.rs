@@ -5,7 +5,7 @@ use std::fmt::{Debug, Display, Error, Formatter};
 use std::rc::Rc;
 
 use column::Column;
-use common::DataType;
+use common::{ColumnIdentifier, DataType};
 use dataflow::ops;
 use dataflow::ops::filter::FilterCondition;
 use dataflow::ops::grouped::aggregate::Aggregation as AggregationKind;
@@ -458,7 +458,7 @@ pub enum MirNodeType {
     Leaf {
         node: MirNodeRef,
         keys: Vec<Column>,
-        operators: Vec<nom_sql::Operator>,
+        operators: Vec<(ColumnIdentifier, nom_sql::Operator)>,
     },
     /// Rewrite node
     Rewrite {

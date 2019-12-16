@@ -6,6 +6,34 @@ use std::collections::HashMap;
 use std::ops::Bound;
 use std::fmt;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ColumnIdentifier {
+    table: Option<String>,
+    column: String,
+}
+
+impl ColumnIdentifier {
+    pub fn new(table: Option<String>, column: String) -> Self {
+        ColumnIdentifier {
+            table,
+            column,
+        }
+    }
+}
+
+impl PartialEq for ColumnIdentifier {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare both table name & column name if both identifier have a
+        // table name, otherwise only compare the column name.
+        if self.table.is_some() && other.table.is_some() {
+            self.table.as_ref().unwrap() == other.table.as_ref().unwrap()
+            && self.column == other.column
+        } else {
+            self.column == other.column
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Link {
     pub src: LocalNodeIndex,

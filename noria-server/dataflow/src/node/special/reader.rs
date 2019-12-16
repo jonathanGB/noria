@@ -3,6 +3,7 @@ use backlog::{KeyRange, ReaderLookup};
 use crate::prelude::*;
 use noria::channel;
 use std::borrow::Cow;
+use common::ColumnIdentifier;
 
 /// A StreamUpdate reflects the addition or deletion of a row from a reader node.
 #[derive(Clone, Debug, PartialEq)]
@@ -38,7 +39,7 @@ pub struct Reader {
 
     for_node: NodeIndex,
     state: Option<Vec<usize>>,
-    operators: Vec<nom_sql::Operator>,
+    operators: Vec<(ColumnIdentifier, nom_sql::Operator)>,
 }
 
 impl Clone for Reader {
@@ -55,7 +56,7 @@ impl Clone for Reader {
 }
 
 impl Reader {
-    pub fn new(for_node: NodeIndex, operators: Vec<nom_sql::Operator>) -> Self {
+    pub fn new(for_node: NodeIndex, operators: Vec<(ColumnIdentifier, nom_sql::Operator)>) -> Self {
         Reader {
             writer: None,
             streamers: Vec::new(),
@@ -71,8 +72,8 @@ impl Reader {
         self.for_node
     }
 
-    pub fn get_operators(&self) -> Vec<nom_sql::Operator> {
-        self.operators.clone()
+    pub fn get_operators(&self) -> &[(ColumnIdentifier, nom_sql::Operator)] {
+        &self.operators
     }
 
     #[allow(dead_code)]

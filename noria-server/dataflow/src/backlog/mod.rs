@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use common::SizeOf;
+use common::{ColumnIdentifier, SizeOf};
 use rand::prelude::*;
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -519,7 +519,7 @@ pub struct SingleReadHandle {
     handle: multir::Handle,
     trigger: Option<Arc<dyn Fn(&KeyRange) -> bool + Send + Sync>>,
     key: Vec<usize>,
-    operators: Vec<nom_sql::Operator>,
+    operators: Vec<(ColumnIdentifier, nom_sql::Operator)>,
 }
 
 impl SingleReadHandle {
@@ -534,13 +534,13 @@ impl SingleReadHandle {
         (*self.trigger.as_ref().unwrap())(key)
     }
 
-    pub fn get_operators(&self) -> (&Vec<usize>, &Vec<nom_sql::Operator>) {
-        (&self.key, &self.operators)
+    pub fn get_operators(&self) -> (&[(ColumnIdentifier, nom_sql::Operator)]) {
+        &self.operators
     }
 
-    pub fn set_operators(&mut self, operators: Vec<nom_sql::Operator>) {
+    pub fn set_operators(&mut self, operators: &[(ColumnIdentifier, nom_sql::Operator)]) {
         println!("set_operators called");
-        self.operators = operators;
+        self.operators = operators.to_vec();
     }
 
     /// Find all entries that matched the given conditions.

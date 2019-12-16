@@ -1,6 +1,6 @@
 use arccstr::ArcCStr;
 
-use chrono::{self, NaiveDateTime, NaiveDate, NaiveTime};
+use chrono::{self, NaiveDateTime};
 
 use nom_sql::Literal;
 

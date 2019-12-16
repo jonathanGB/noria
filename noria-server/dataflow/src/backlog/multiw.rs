@@ -149,7 +149,6 @@ impl Handle {
 
         match *self {
             Handle::Single(ref h) => {
-                println!("Single!");
                 if let KeyRange::RangeSingle(start, end) = key.into_owned() {
                     let range = (start, end);
 
@@ -163,7 +162,6 @@ impl Handle {
                 }
             }
             Handle::Double(ref h) => {
-                println!("Double!");
                 if let KeyRange::RangeDouble(start, end) = key.into_owned() {
                     let range = (start, end);
 
@@ -177,7 +175,6 @@ impl Handle {
                 }
             }
             Handle::Many(ref h) => {
-                println!("Many!");
                 if let KeyRange::RangeMany(start, end) = key.into_owned() {
                     assert!(start != Unbounded, "Can't have unbounded in multi-equality + inequality case");
                     assert!(end != Unbounded, "Can't have unbounded in multi-equality + inequality case");

@@ -69,7 +69,6 @@ impl SingleState {
             KeyedState::Quad(ref mut map) => insert_row_match_impl!(self, r, map),
             KeyedState::Quin(ref mut map) => insert_row_match_impl!(self, r, map),
             KeyedState::Sex(ref mut map) => insert_row_match_impl!(self, r, map),
-            _ => unimplemented!() // TODO(jonathangb): range add rows?
         }
 
         self.rows += 1;
@@ -117,7 +116,6 @@ impl SingleState {
             KeyedState::Sex(ref mut map) => {
                 remove_row_match_impl!(self, r, do_remove, map, (DataType, _, _, _, _, _))
             }
-            _ => unimplemented!(), // TODO(jonathangb): range remove rows?
         }
         None
     }

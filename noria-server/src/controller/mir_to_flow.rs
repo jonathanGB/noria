@@ -4,7 +4,7 @@ use nom_sql::{
 use std::collections::HashMap;
 
 use crate::controller::Migration;
-use common::DataType;
+use common::{ColumnIdentifier, DataType};
 use dataflow::ops::filter::FilterCondition;
 use dataflow::ops::join::{Join, JoinType};
 use dataflow::ops::latest::Latest;
@@ -871,7 +871,7 @@ fn materialize_leaf_node(
     name: String,
     key_cols: &[Column],
     mig: &mut Migration,
-    operators: Vec<nom_sql::Operator>,
+    operators: Vec<(ColumnIdentifier, nom_sql::Operator)>,
 ) {
     let na = parent.borrow().flow_node_addr().unwrap();
 

@@ -129,44 +129,34 @@ fn handle_message(
                 ret.resize(keys.len(), Vec::new());
 
                 use nom_sql::Operator;
-                let (cols, operators) = reader.get_operators();
+                let operators = reader.get_operators();
                 println!("operators: {:?}", operators);
-                let found : Vec<_> = if operators.iter().all(|op| *op == Operator::Equal) {
+                let found : Vec<_> = if operators.iter().all(|(_, op)| *op == Operator::Equal) {
+                    // We just have equalities, do a normal equi-query.
                     keys
                         .into_iter()
                         .map(|ref key| reader.try_find_and(key, dup))
                         .enumerate()
                         .collect()
-                } else if operators.len() == 1 && operators[0] != Operator::Equal { 
+                } else if operators.len() == 1 && operators[0].1 != Operator::Equal { 
+                    // We have a simple inequality query.
                     keys
                         .iter_mut()
                         .map(|key| {
-                            let range = match operators[0] {
+                            let range = match operators[0].1 {
                                 Operator::Greater => (Excluded(vec![key[0].clone()]), Unbounded),
                                 Operator::GreaterOrEqual => (Included(vec![key[0].clone()]), Unbounded),
                                 Operator::Less => (Unbounded, Excluded(vec![key[0].clone()])),
                                 Operator::LessOrEqual => (Unbounded, Included(vec![key[0].clone()])),
-                                _ => unimplemented!(),
+                                _ => unreachable!("We expect an inequality operator"),
                             };
+
                             reader.try_find_range_and(range, dup)
-                            // let rs = match reader.try_find_range_and(range, dup) {
-                            //     RangeLookup::Ok(res, _) => {
-                            //         let flattened_res : Vec<Vec<_>> = res.into_iter().flatten().collect();
-                            //         Ok(Some(flattened_res))
-                            //     },
-                            //     Ok(None) => Ok(None),
-                            //     Err(None) => Err(()),
-                            //     Err(Some(miss)) => {
-                            //         missing_ranges.push(miss);
-                            //         Ok(None)
-                            //     }
-                            // };
-                            // (key, rs)
                         })
                         .enumerate()
                         .collect()
                 } else if operators.len() > 1 {
-                    assert!(operators.iter().is_partitioned(|op| *op == Operator::Equal),
+                    assert!(operators.iter().is_partitioned(|(_, op)| *op == Operator::Equal),
                     "We currently support multi-equalities at first, and then inequalities");
                     keys
                         .iter_mut()
@@ -175,7 +165,7 @@ fn handle_message(
                             let mut equality_keys = vec![];
                             let mut lower_bound = Unbounded;
                             let mut higher_bound = Unbounded;
-                            for (i, op) in operators.iter().enumerate() {
+                            for (i, (col, op)) in operators.iter().enumerate() {
                                 let keyi = key[i].clone();
 
                                 if *op == Operator::Equal {
@@ -183,30 +173,45 @@ fn handle_message(
                                     continue;
                                 }
 
+                                // If an existing inequality has been applied, then a new 
+                                // inequality must be applied on the same column (for now).
                                 match inequality_col {
-                                    // TODO(jonathangb): check inequality on same col.
-                                    Some(_) => {
-                                        match op {
-                                            Operator::Less => higher_bound = Excluded(keyi),
-                                            Operator::LessOrEqual => higher_bound = Included(keyi),
-                                            Operator::Greater => lower_bound = Excluded(keyi),
-                                            Operator::GreaterOrEqual => lower_bound = Included(keyi),
-                                            _ => {},
-                                        };
-                                    },
-                                    None => {
-                                        inequality_col = Some(cols[i]);
-                                        match op {
-                                            Operator::Less => higher_bound = Excluded(keyi),
-                                            Operator::LessOrEqual => higher_bound = Included(keyi),
-                                            Operator::Greater => lower_bound = Excluded(keyi),
-                                            Operator::GreaterOrEqual => lower_bound = Included(keyi),
-                                            _ => {},
-                                        };
-                                    },
-                                }
+                                    Some(used_inequality_col) if used_inequality_col != col => 
+                                        unimplemented!("Inequalities can only be applied on a single column for now"),
+                                    None => inequality_col = Some(col),
+                                    Some(_) => {}
+                                };
+
+                                // Update the inequality's related bound (lower/higher).
+                                // Note that by default bounds are Unbounded.
+                                match op {
+                                    Operator::Less => {
+                                        assert!(higher_bound == Unbounded, 
+                                            "A higher bound has been set more than once on the same column");
+                                        higher_bound = Excluded(keyi);
+                                    }
+                                    Operator::LessOrEqual => {
+                                        assert!(higher_bound == Unbounded,
+                                            "A higher bound has been set more than once on the same column");
+                                        higher_bound = Included(keyi);
+                                    }
+                                    Operator::Greater => {
+                                        assert!(lower_bound == Unbounded,
+                                            "A lower bound has been set more than once on the same column");
+                                        lower_bound = Excluded(keyi);
+                                    }
+                                    Operator::GreaterOrEqual => {
+                                        assert!(lower_bound == Unbounded,
+                                            "A lower bound has been set more than once on the same column");
+                                        lower_bound = Included(keyi);
+                                    }
+                                    _ => unreachable!("We expect an inequality operator"),
+                                };
                             }
 
+                            // Push the lower/higher bounds after the equality keys.
+                            // Equality keys must be first, because the RangeBounds
+                            // trait compares keys by traversing a compound key in order.
                             let mut first_bound = equality_keys.clone();
                             let first_bound = match &lower_bound {
                                 Included(bound) => {
@@ -221,7 +226,7 @@ fn handle_message(
                                     let higher_bound = match &higher_bound {
                                         Included(bound) => bound,
                                         Excluded(bound) => bound,
-                                        Unbounded => unreachable!(), // We can't have both lower and higher unbounded at once.
+                                        Unbounded => unreachable!("We can't have both lower and higher unbounded at once"),
                                     };
                                     first_bound.push(common::DataType::min_value(higher_bound));
                                     Included(first_bound)
@@ -241,7 +246,7 @@ fn handle_message(
                                     let lower_bound = match lower_bound {
                                         Included(ref bound) => bound,
                                         Excluded(ref bound) => bound,
-                                        Unbounded => unreachable!(), // We can't have both lower and higher unbounded at once.
+                                        Unbounded => unreachable!("We can't have both lower and higher unbounded at once"),
                                     };
                                     second_bound.push(common::DataType::max_value(lower_bound));
                                     Included(second_bound)
@@ -249,20 +254,6 @@ fn handle_message(
                             };
 
                             reader.try_find_range_and((first_bound, second_bound), dup)
-                            // let rs = reader.try_find_range_and((first_bound, second_bound), dup).map(|r| r.0);
-                            // let rs = match rs {
-                            //     Ok(Some(res)) => {
-                            //         let flattened_res : Vec<Vec<_>> = res.into_iter().flatten().collect();
-                            //         Ok(Some(flattened_res))
-                            //     }
-                            //     Ok(None) => Ok(None),
-                            //     Err(None) => Err(()),
-                            //     Err(Some(miss)) => {
-                            //         missing_ranges.push(miss);
-                            //         Ok(None)
-                            //     }
-                            // };
-                            // (key, rs)
                         })
                         .enumerate()
                         .collect()

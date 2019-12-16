@@ -82,7 +82,6 @@ impl Handle {
     {
         match *self {
             Handle::Single(ref h) => {
-                println!("Single!");
                 let start = range.start_bound();
                 let end = range.end_bound();
 
@@ -106,7 +105,6 @@ impl Handle {
                 }
             }
             Handle::Double(ref h) => {
-                println!("Double!");
                 let start = range.start_bound();
                 let end = range.end_bound();
 
@@ -130,7 +128,6 @@ impl Handle {
                 }
             }
             Handle::Many(ref h) => {
-                println!("Many!");
                 assert!(range.start_bound() != Unbounded);
                 assert!(range.end_bound() != Unbounded);
  

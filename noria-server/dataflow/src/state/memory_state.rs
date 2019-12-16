@@ -47,8 +47,12 @@ impl State for MemoryState {
             return;
         }
 
+        // TODO(jonathangb): dedup in datafolow's migration
+        // rather than here? I.e. fix the problem at the root.
+        let mut columns = columns.to_vec();
+        columns.dedup();
         self.state
-            .push(SingleState::new(columns, partial.is_some()));
+            .push(SingleState::new(&columns, partial.is_some()));
 
         if !self.state.is_empty() && partial.is_none() {
             // we need to *construct* the index!
@@ -181,7 +185,11 @@ impl MemoryState {
     /// Returns the index in `self.state` of the index keyed on `cols`, or None if no such index
     /// exists.
     fn state_for(&self, cols: &[usize]) -> Option<usize> {
-        self.state.iter().position(|s| s.key() == cols)
+        // TODO(jonathangb): dedup in datafolow's migration
+        // rather than here? I.e. fix the problem at the root.
+        let mut cols = cols.to_vec();
+        cols.dedup();
+        self.state.iter().position(|s| s.key() == &cols[..])
     }
 
     fn insert(&mut self, r: Vec<DataType>, partial_tag: Option<Tag>) -> bool {

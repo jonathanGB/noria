@@ -3,6 +3,7 @@ use mir::query::MirQuery;
 use mir::{Column, MirNodeRef};
 use noria::DataType;
 use petgraph::graph::NodeIndex;
+use common::ColumnIdentifier;
 // TODO(malte): remove if possible
 use dataflow::ops::filter::FilterCondition;
 use dataflow::ops::join::JoinType;
@@ -268,21 +269,27 @@ impl SqlToMirConverter {
             )
         };
 
+        let sanitized_columns : Vec<Column> = columns
+            .clone()
+            .into_iter()
+            .map(|mut c| {
+                sanitize_leaf_column(&mut c, name);
+                c
+            })
+            .collect();
+        let operators = sanitized_columns
+            .iter()
+            .map(|column| (ColumnIdentifier::new(column.table.clone(), column.name.clone()), nom_sql::Operator::Equal))
+            .collect();
+
         let new_leaf = MirNode::new(
             name,
             self.schema_version,
-            columns
-                .clone()
-                .into_iter()
-                .map(|mut c| {
-                    sanitize_leaf_column(&mut c, name);
-                    c
-                })
-                .collect(),
+            sanitized_columns,
             MirNodeType::Leaf {
                 node: parent.clone(),
                 keys: Vec::from(params),
-                operators: vec![nom_sql::Operator::Equal; params.len()],
+                operators,
             },
             vec![n],
             vec![],
@@ -1915,8 +1922,11 @@ impl SqlToMirConverter {
                 } else {
                     qg.parameters().into_iter().map(|(col, _)| Column::from(col)).collect()
                 };
-                // TODO(jonathangb): keep the columns.
-                let operators = qg.parameters().into_iter().map(|(_, op)| op.clone()).collect();
+
+                let operators = qg.parameters()
+                    .into_iter()
+                    .map(|(col, op)| (ColumnIdentifier::new(col.table.clone(), col.name.clone()), op.clone()))
+                    .collect();
 
                 let leaf_node = MirNode::new(
                     name,

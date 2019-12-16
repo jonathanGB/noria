@@ -20,6 +20,7 @@
 //!
 //! Beware, Here be dragons™
 
+use common::ColumnIdentifier;
 use crate::controller::ControllerInner;
 use dataflow::prelude::*;
 use dataflow::{node, prelude::Packet};
@@ -230,7 +231,7 @@ impl<'a> Migration<'a> {
         self.mainline.graph()
     }
 
-    fn ensure_reader_for(&mut self, n: NodeIndex, name: Option<String>, operators: Vec<nom_sql::Operator>) {
+    fn ensure_reader_for(&mut self, n: NodeIndex, name: Option<String>, operators: Vec<(ColumnIdentifier, nom_sql::Operator)>) {
         use std::collections::hash_map::Entry;
         if let Entry::Vacant(e) = self.readers.entry(n) {
             // make a reader
@@ -267,7 +268,7 @@ impl<'a> Migration<'a> {
     /// Set up the given node such that its output can be efficiently queried.
     ///
     /// To query into the maintained state, use `ControllerInner::get_getter`.
-    pub fn maintain(&mut self, name: String, n: NodeIndex, key: &[usize], operators: Vec<nom_sql::Operator>) {
+    pub fn maintain(&mut self, name: String, n: NodeIndex, key: &[usize], operators: Vec<(ColumnIdentifier, nom_sql::Operator)>) {
         self.ensure_reader_for(n, Some(name), operators);
 
         let ri = self.readers[&n];
