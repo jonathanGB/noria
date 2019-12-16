@@ -391,6 +391,8 @@ impl KeyRange {
     }
 
     pub fn to_key_type<'a>(&'a self) -> common::KeyType<'a> {
+        use std::ops::Bound::{Included, Excluded, Unbounded};
+
         match self {
             Self::Point(range) => {
                 match range.len() {
@@ -405,7 +407,77 @@ impl KeyRange {
             }
             Self::RangeSingle(start, end) => common::KeyType::RangeSingle((start.clone(), end.clone())),
             Self::RangeDouble(start, end) => common::KeyType::RangeDouble((start.clone(), end.clone())),
-            Self::RangeMany(start, end) => common::KeyType::RangeMany((start.clone(), end.clone())),
+            Self::RangeMany(start, end) => {
+                let len = match start {
+                    Included(start) => Some(start.len()),
+                    Excluded(start) => Some(start.len()),  
+                    Unbounded => None, 
+                };
+
+                // Make sure end bound corresponds to the length of the start bound.
+                match end {
+                    Included(end) => assert_eq!(len.unwrap(), end.len()),
+                    Excluded(end) => assert_eq!(len.unwrap(), end.len()),
+                    Unbounded if len.is_none() => unreachable!("Both start and end bounds can't be Unbounded"),
+                    Unbounded => {}
+                };
+
+                match len.unwrap() {
+                    3 => {
+                        let start = match start {
+                            Included(start) => Included((start[0].clone(), start[1].clone(), start[2].clone())),
+                            Excluded(start) => Excluded((start[0].clone(), start[1].clone(), start[2].clone())),
+                            Unbounded => Unbounded,
+                        };
+                        let end = match end {
+                            Included(end) => Included((end[0].clone(), end[1].clone(), end[2].clone())),
+                            Excluded(end) => Excluded((end[0].clone(), end[1].clone(), end[2].clone())),
+                            Unbounded => Unbounded,
+                        };
+                        common::KeyType::RangeTri((start, end))
+                    }
+                    4 => {
+                        let start = match start {
+                            Included(start) => Included((start[0].clone(), start[1].clone(), start[2].clone(), start[3].clone())),
+                            Excluded(start) => Excluded((start[0].clone(), start[1].clone(), start[2].clone(), start[3].clone())),
+                            Unbounded => Unbounded,
+                        };
+                        let end = match end {
+                            Included(end) => Included((end[0].clone(), end[1].clone(), end[2].clone(), end[3].clone())),
+                            Excluded(end) => Excluded((end[0].clone(), end[1].clone(), end[2].clone(), end[3].clone())),
+                            Unbounded => Unbounded,
+                        };
+                        common::KeyType::RangeQuad((start, end))
+                    }
+                    5 => {
+                        let start = match start {
+                            Included(start) => Included((start[0].clone(), start[1].clone(), start[2].clone(), start[3].clone(), start[4].clone())),
+                            Excluded(start) => Excluded((start[0].clone(), start[1].clone(), start[2].clone(), start[3].clone(), start[4].clone())),
+                            Unbounded => Unbounded,
+                        };
+                        let end = match end {
+                            Included(end) => Included((end[0].clone(), end[1].clone(), end[2].clone(), end[3].clone(), end[4].clone())),
+                            Excluded(end) => Excluded((end[0].clone(), end[1].clone(), end[2].clone(), end[3].clone(), end[4].clone())),
+                            Unbounded => Unbounded,
+                        };
+                        common::KeyType::RangeQuin((start, end))
+                    }
+                    6 => {
+                        let start = match start {
+                            Included(start) => Included((start[0].clone(), start[1].clone(), start[2].clone(), start[3].clone(), start[4].clone(), start[5].clone())),
+                            Excluded(start) => Excluded((start[0].clone(), start[1].clone(), start[2].clone(), start[3].clone(), start[4].clone(), start[5].clone())),
+                            Unbounded => Unbounded,
+                        };
+                        let end = match end {
+                            Included(end) => Included((end[0].clone(), end[1].clone(), end[2].clone(), end[3].clone(), end[4].clone(), end[5].clone())),
+                            Excluded(end) => Excluded((end[0].clone(), end[1].clone(), end[2].clone(), end[3].clone(), end[4].clone(), end[5].clone())),
+                            Unbounded => Unbounded,
+                        };
+                        common::KeyType::RangeSex((start, end))
+                    }
+                    _ => unreachable!(),
+                }
+            }
         }
     }
 

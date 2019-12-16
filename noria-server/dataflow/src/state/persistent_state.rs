@@ -428,7 +428,10 @@ impl PersistentState {
             KeyType::Sex(k) => serialize(k, extra),
             KeyType::RangeSingle(k) => serialize(k, extra),
             KeyType::RangeDouble(k) => serialize(k, extra),
-            KeyType::RangeMany(k) => serialize(k, extra),
+            KeyType::RangeTri(k) => serialize(k, extra),
+            KeyType::RangeQuad(k) => serialize(k, extra),
+            KeyType::RangeQuin(k) => serialize(k, extra),
+            KeyType::RangeSex(k) => serialize(k, extra),
         }
     }
 

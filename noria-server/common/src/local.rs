@@ -157,7 +157,12 @@ pub enum KeyType<'a> {
     Sex((DataType, DataType, DataType, DataType, DataType, DataType)),
     RangeSingle((Bound<DataType>, Bound<DataType>)),
     RangeDouble((Bound<(DataType, DataType)>, Bound<(DataType, DataType)>)),
-    RangeMany((Bound<Vec<DataType>>, Bound<Vec<DataType>>)),
+    RangeTri((Bound<(DataType, DataType, DataType)>, Bound<(DataType, DataType, DataType)>)),
+    RangeQuad((Bound<(DataType, DataType, DataType, DataType)>, Bound<(DataType, DataType, DataType, DataType)>)),
+    RangeQuin((Bound<(DataType, DataType, DataType, DataType, DataType)>,
+               Bound<(DataType, DataType, DataType, DataType, DataType)>)),
+    RangeSex((Bound<(DataType, DataType, DataType, DataType, DataType, DataType)>,
+              Bound<(DataType, DataType, DataType, DataType, DataType, DataType)>)),
 }
 
 impl<'a> KeyType<'a> {

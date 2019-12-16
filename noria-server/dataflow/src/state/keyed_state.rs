@@ -67,11 +67,23 @@ impl KeyedState {
                 let rs : Vec<Vec<DataType>> = m.range(k.clone()).flat_map(|(_, row)| row).map(|row| (**row).clone()).collect();
                 if rs.is_empty() { None } else { Some(RecordResult::Owned(rs)) }
             }
-            // TODO(jonathangb): iterate with range KeyTypes
-            bad @ _ => {
-                println!("bad: {:?}\n\n{:?}\n", bad.0, bad.1);
-                unreachable!()
+            (&KeyedState::Tri(ref m), &KeyType::RangeTri(ref k)) => {
+                let rs : Vec<Vec<DataType>> = m.range(k.clone()).flat_map(|(_, row)| row).map(|row| (**row).clone()).collect();
+                if rs.is_empty() { None } else { Some(RecordResult::Owned(rs)) }
             }
+            (&KeyedState::Quad(ref m), &KeyType::RangeQuad(ref k)) => {
+                let rs : Vec<Vec<DataType>> = m.range(k.clone()).flat_map(|(_, row)| row).map(|row| (**row).clone()).collect();
+                if rs.is_empty() { None } else { Some(RecordResult::Owned(rs)) }      
+            }
+            (&KeyedState::Quin(ref m), &KeyType::RangeQuin(ref k)) => {
+                let rs : Vec<Vec<DataType>> = m.range(k.clone()).flat_map(|(_, row)| row).map(|row| (**row).clone()).collect();
+                if rs.is_empty() { None } else { Some(RecordResult::Owned(rs)) }
+            }
+            (&KeyedState::Sex(ref m), &KeyType::RangeSex(ref k)) => {
+                let rs : Vec<Vec<DataType>> = m.range(k.clone()).flat_map(|(_, row)| row).map(|row| (**row).clone()).collect();
+                if rs.is_empty() { None } else { Some(RecordResult::Owned(rs)) }
+            }
+            _ => unreachable!(),
         }
     }
 
