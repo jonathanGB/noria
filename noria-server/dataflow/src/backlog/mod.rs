@@ -31,6 +31,8 @@ fn new_inner(
     key: &[usize],
     trigger: Option<Arc<dyn Fn(&KeyRange) -> bool + Send + Sync>>,
 ) -> (SingleReadHandle, WriteHandle) {
+    println!("cols: {:?}", key);
+
     let contiguous = {
         let mut contiguous = true;
         let mut last = None;

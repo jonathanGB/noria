@@ -60,6 +60,7 @@ pub struct Migration<'a> {
     pub(super) context: HashMap<String, DataType>,
 }
 
+// TODO(jonathangb): Migration root?
 impl<'a> Migration<'a> {
     /// Add the given `Ingredient` to the Soup.
     ///
@@ -270,6 +271,7 @@ impl<'a> Migration<'a> {
     /// To query into the maintained state, use `ControllerInner::get_getter`.
     pub fn maintain(&mut self, name: String, n: NodeIndex, key: &[usize], operators: Vec<(ColumnIdentifier, nom_sql::Operator)>) {
         self.ensure_reader_for(n, Some(name), operators);
+        println!("maintain key: {:?}", key);
 
         let ri = self.readers[&n];
 

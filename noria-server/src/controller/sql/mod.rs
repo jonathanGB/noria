@@ -891,16 +891,24 @@ impl SqlIncorporator {
         // hold for reuse or extension
         let qfp = match q {
             SqlQuery::CompoundSelect(csq) => {
+                println!("COMPOUND..\n{:?}\n\n", csq);
                 // NOTE(malte): We can't currently reuse complete compound select queries, since
                 // our reuse logic operates on `SqlQuery` structures. Their subqueries do get
                 // reused, however.
                 self.add_compound_query(&query_name, &csq, is_leaf, mig)
                     .unwrap()
             }
-            SqlQuery::Select(sq) => self.add_select_query(&query_name, &sq, is_leaf, mig)?.0,
-            ref q @ SqlQuery::CreateTable { .. } => self.add_base_via_mir(&query_name, &q, mig),
+            SqlQuery::Select(sq) => {
+                println!("SELECT..\n{:?}\n\n", sq);
+                self.add_select_query(&query_name, &sq, is_leaf, mig)?.0
+            }
+            ref q @ SqlQuery::CreateTable { .. } => {
+                println!("CREATE..\n{:?}\n\n", q);
+                self.add_base_via_mir(&query_name, &q, mig)
+            }
             q => panic!("unhandled query type in recipe: {:?}", q),
         };
+        println!("qfp: {:?}", qfp);
 
         // record info about query
         self.leaf_addresses

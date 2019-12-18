@@ -46,12 +46,16 @@ impl Node {
         FS: IntoIterator<Item = S2>,
         NT: Into<NodeType>,
     {
-        Node {
+        println!("fields..");
+        let n = Node {
             name: name.to_string(),
             index: None,
             domain: None,
 
-            fields: fields.into_iter().map(|s| s.to_string()).collect(),
+            fields: fields.into_iter().map(|s| {
+                println!("{}", s.to_string());
+                s.to_string()
+            }).collect(),
             parents: Vec::new(),
             children: Vec::new(),
             inner: inner.into(),
@@ -60,7 +64,9 @@ impl Node {
             purge: false,
 
             sharded_by: Sharding::None,
-        }
+        };
+        println!("\n\n");
+        n
     }
 
     pub fn mirror<NT: Into<NodeType>>(&self, n: NT) -> Node {
