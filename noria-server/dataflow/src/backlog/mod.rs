@@ -130,8 +130,6 @@ pub(crate) struct WriteHandle {
     mem_size: usize,
 }
 
-// TODO(jonathangb): ConcreteKey necessary?
-type ConcreteKey<'a> = Cow<'a, [DataType]>;
 type Key<'a> = Cow<'a, KeyRange>;
 pub(crate) struct MutWriteHandleEntry<'a> {
     handle: &'a mut WriteHandle,
