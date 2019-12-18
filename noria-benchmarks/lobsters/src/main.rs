@@ -132,10 +132,13 @@ impl trawler::LobstersClient for MysqlTrawler {
         &mut self,
         acting_as: Option<UserId>,
         req: trawler::LobstersRequest,
+        priming: bool,
     ) -> Self::RequestFuture {
         let c = self.c.pool().get_conn();
 
-        let c = if let Some(u) = acting_as {
+        let c = if priming {
+            Either::Right(c)
+        } else if let Some(u) = acting_as {
             let tokens = self.tokens.get(&u).cloned();
             Either::Left(c.and_then(move |c| {
                 if let Some(u) = tokens {
@@ -153,7 +156,7 @@ impl trawler::LobstersClient for MysqlTrawler {
         };
 
         // Give shim a heads up that we have finished priming.
-        let c = if let trawler::LobstersRequest::Story(..) = req {
+        let c = if !priming {
             if !self.reset {
                 self.reset = true;
                 Either::Right(c.and_then(|c| c.drop_query("SET @primed = 1")))
@@ -247,10 +250,10 @@ impl trawler::LobstersClient for MysqlTrawler {
                         endpoints::$module::comment_vote::handle(c, acting_as, comment, v).await
                     }
                     LobstersRequest::Submit { id, title } => {
-                        endpoints::$module::submit::handle(c, acting_as, id, title).await
+                        endpoints::$module::submit::handle(c, acting_as, id, title, priming).await
                     }
                     LobstersRequest::Comment { id, story, parent } => {
-                        endpoints::$module::comment::handle(c, acting_as, id, story, parent).await
+                        endpoints::$module::comment::handle(c, acting_as, id, story, parent, priming).await
                     }
                 }
             }}
@@ -267,7 +270,7 @@ impl trawler::LobstersClient for MysqlTrawler {
 
             // notifications
             if let Some(uid) = acting_as {
-                if with_notifications {
+                if with_notifications && !priming {
                     match variant {
                         Variant::Original => endpoints::original::notifications(c, uid).await,
                         Variant::Noria => endpoints::noria::notifications(c, uid).await,
@@ -286,15 +289,8 @@ fn main() {
         .version("0.1")
         .about("Benchmark a lobste.rs Rails installation using MySQL directly")
         .arg(
-            Arg::with_name("memscale")
-                .long("memscale")
-                .takes_value(true)
-                .default_value("1.0")
-                .help("Memory scale factor for workload"),
-        )
-        .arg(
-            Arg::with_name("reqscale")
-                .long("reqscale")
+            Arg::with_name("scale")
+                .long("scale")
                 .takes_value(true)
                 .default_value("1.0")
                 .help("Reuest load scale factor for workload"),
@@ -332,7 +328,6 @@ fn main() {
             Arg::with_name("fakeshards")
                 .long("simulate-shards")
                 .takes_value(true)
-                .conflicts_with("memscale")
                 .help("Simulate if read_ribbons base had N shards"),
         )
         .arg(
@@ -371,23 +366,15 @@ fn main() {
     let simulate_shards = args
         .value_of("fakeshards")
         .map(|_| value_t_or_exit!(args, "fakeshards", u32));
-    assert!(
-        simulate_shards.is_none() || value_t_or_exit!(args, "memscale", f64) == 1.0,
-        "cannot simulate sharding with memscale != 1 (b/c of NUM_STORIES)"
-    );
     let in_flight = value_t_or_exit!(args, "in-flight", usize);
 
     let mut wl = trawler::WorkloadBuilder::default();
-    wl.scale(
-        value_t_or_exit!(args, "memscale", f64),
-        value_t_or_exit!(args, "reqscale", f64),
-    )
-    .warmup_scale(3000.0)
-    .time(
-        time::Duration::from_secs(value_t_or_exit!(args, "warmup", u64)),
-        time::Duration::from_secs(value_t_or_exit!(args, "runtime", u64)),
-    )
-    .in_flight(in_flight);
+    wl.scale(value_t_or_exit!(args, "scale", f64))
+        .time(
+            time::Duration::from_secs(value_t_or_exit!(args, "warmup", u64)),
+            time::Duration::from_secs(value_t_or_exit!(args, "runtime", u64)),
+        )
+        .in_flight(in_flight);
 
     if let Some(h) = args.value_of("histogram") {
         wl.with_histogram(h);
