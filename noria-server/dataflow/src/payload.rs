@@ -65,7 +65,7 @@ pub enum InitialState {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ReplayPieceContext {
     Partial {
-        for_keys: HashSet<KeyRange>, // TODO(jonathangb): switch to KeyRange?
+        for_keys: HashSet<KeyRange>,
         unishard: bool,
         ignore: bool,
     },

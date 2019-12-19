@@ -165,7 +165,6 @@ impl SingleState {
                 ),
                 Vec::new(),
             ),
-            _ => unimplemented!(),
         };
 
         assert!(replaced.is_none());

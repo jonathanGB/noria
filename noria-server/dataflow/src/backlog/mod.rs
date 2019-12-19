@@ -206,7 +206,7 @@ impl<'a> WriteHandleEntry<'a> {
         }
 }
 
-fn key_from_record<'a, R>(key: &[usize], contiguous: bool, record: R) -> Key<'a> // TODO(jonathangb): concrete key return?
+fn key_from_record<'a, R>(key: &[usize], contiguous: bool, record: R) -> Key<'a>
 where
     R: Into<Cow<'a, [DataType]>>,
 {
@@ -649,7 +649,6 @@ impl SingleReadHandle {
 mod tests {
     use super::*;
 
-    // TODO(jonathangb): Fix all broken tests.
     #[test]
     fn store_works() {
         let a = vec![1.into(), "a".into()];

@@ -1788,7 +1788,6 @@ impl Domain {
                                     path.first().unwrap().partial_key.as_ref().unwrap();
                                 data.retain(|r| {
                                     for_keys.iter().any(|k| {
-                                        // TODO(jonathangb): can we assume it is a point?
                                         assert!(k.is_point());
                                         let k = k.get_ref_key_point();
                                         partial_keys.iter().enumerate().all(|(i, c)| r[*c] == k[i])

@@ -130,7 +130,6 @@ fn handle_message(
 
                 use nom_sql::Operator;
                 let operators = reader.get_operators();
-                println!("operators: {:?}", operators);
                 let found : Vec<_> = if operators.iter().all(|(_, op)| *op == Operator::Equal) {
                     // We just have equalities, do a normal equi-query.
                     keys
@@ -264,8 +263,6 @@ fn handle_message(
                 let mut ready = true;
                 let mut missing_ranges = Vec::new();
                 for (i, res) in found {
-                    println!("Res: {:?}", res);
-
                     match res {
                         ReaderLookup::Ok(rs, _) => {
                             // immediate hit!
@@ -486,36 +483,6 @@ impl Future for BlockingRead {
                         }
                     }
                 }
-                /*for (i, key) in this.keys.iter_mut().enumerate() {
-                    if key.is_empty() {
-                        // already have this value
-                    } else { // TODO(jonathangb): Add range partial.
-                        // note that this *does* mean we'll trigger replay multiple times for things
-                        // that miss and aren't replayed in time, which is a little sad. but at the
-                        // same time, that replay trigger will just be ignored by the target domain.
-                        match reader.try_find_and(key, dup).map(|r| r.0) {
-                            Ok(Some(rs)) => {
-                                this.read[i] = rs;
-                                key.clear();
-                            }
-                            Err(()) => {
-                                // map has been deleted, so server is shutting down
-                                return Err(());
-                            }
-                            Ok(None) => {
-                                if now > *this.next_trigger {
-                                    // maybe the key was filled but then evicted, and we missed it?
-                                    if !reader.trigger(key) {
-                                        // server is shutting down and won't do the backfill
-                                        return Err(());
-                                    }
-                                    triggered = true;
-                                }
-                                missing = true;
-                            }
-                        }
-                    }
-                }*/
 
                 if triggered {
                     *this.trigger_timeout *= 2;
