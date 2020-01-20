@@ -239,6 +239,10 @@ impl Ingredient for TopK {
                 grp.extend(group_by.iter().map(|&col| &r[col]).cloned());
 
                 // check out current state
+                // TODO(jonathangb): Range queries w/ topk need to do a range lookup.
+                // Currently, it is a equi lookup (KeyType::from returns a Point).
+                // To solve the problem, topk somewhat needs to know that the current query
+                // is indeed a range query, and conditionally generate the right range- key from there.
                 match db.lookup(&group_by[..], &KeyType::from(&grp[..])) {
                     LookupResult::Some(rs) => {
                         if replay_key_cols.is_some() {
